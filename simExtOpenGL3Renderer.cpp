@@ -1,5 +1,5 @@
-#include "v_repExtOpenGL3Renderer.h"
-#include "v_repLib.h"
+#include "simExtOpenGL3Renderer.h"
+#include "simLib.h"
 #include "4X4Matrix.h"
 #include <iostream>
 #include "openglWindow.h"
@@ -24,7 +24,7 @@
 
 #define MAX_LIGHTS 5
 
-LIBRARY vrepLib;
+LIBRARY simLib;
 
 // Shadeers to be shared between all surfaces.
 ShaderProgram* depthShader = NULL;
@@ -134,10 +134,10 @@ void removeOffscreen(int objectHandle)
     }
 }
 
-VREP_DLLEXPORT unsigned char v_repStart(void* reservedPointer,int reservedInt)
-{ // This is called just once, at the start of V-REP.
+SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
+{ // This is called just once, at the start of CoppeliaSim.
 
-    // Dynamically load and bind V-REP functions:
+    // Dynamically load and bind CoppeliaSim functions:
      // ******************************************
      // 1. Figure out this plugin's directory:
      char curDirAndFile[1024];
@@ -147,39 +147,39 @@ VREP_DLLEXPORT unsigned char v_repStart(void* reservedPointer,int reservedInt)
      getcwd(curDirAndFile, sizeof(curDirAndFile));
  #endif
      std::string currentDirAndPath(curDirAndFile);
-     // 2. Append the V-REP library's name:
+     // 2. Append the CoppeliaSim library's name:
      std::string temp(currentDirAndPath);
  #ifdef _WIN32
-     temp+="/v_rep.dll";
+     temp+="/coppeliaSim.dll";
  #elif defined (__linux)
-     temp+="/libv_rep.so";
+     temp+="/libcoppeliaSim.so";
  #elif defined (__APPLE__)
-     temp+="/libv_rep.dylib";
+     temp+="/libcoppeliaSim.dylib";
  #endif /* __linux || __APPLE__ */
-     // 3. Load the V-REP library:
-     vrepLib=loadVrepLibrary(temp.c_str());
-     if (vrepLib==NULL)
+     // 3. Load the CoppeliaSim library:
+     simLib=loadSimLibrary(temp.c_str());
+     if (simLib==NULL)
      {
-         std::cout << "Error, could not find or correctly load the V-REP library. Cannot start 'OpenGL3Renderer' plugin.\n";
-         return(0); // Means error, V-REP will unload this plugin
+         std::cout << "Error, could not find or correctly load the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
+         return(0); // Means error, CoppeliaSim will unload this plugin
      }
-     if (getVrepProcAddresses(vrepLib)==0)
+     if (getSimProcAddresses(simLib)==0)
      {
-         std::cout << "Error, could not find all required functions in the V-REP library. Cannot start 'OpenGL3Renderer' plugin.\n";
-         unloadVrepLibrary(vrepLib);
-         return(0); // Means error, V-REP will unload this plugin
+         std::cout << "Error, could not find all required functions in the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
+         unloadSimLibrary(simLib);
+         return(0); // Means error, CoppeliaSim will unload this plugin
      }
      // ******************************************
 
-     // Check the version of V-REP:
+     // Check the version of CoppeliaSim:
      // ******************************************
-     int vrepVer;
-     simGetIntegerParameter(sim_intparam_program_version,&vrepVer);
-     if (vrepVer<30201) // if V-REP version is smaller than 3.02.01
+     int simVer;
+     simGetIntegerParameter(sim_intparam_program_version,&simVer);
+     if (simVer<30201) // if CoppeliaSim version is smaller than 3.02.01
      {
-         std::cout << "Sorry, your V-REP copy is somewhat old. Cannot start 'OpenGL3Renderer' plugin.\n";
-         unloadVrepLibrary(vrepLib);
-         return(0); // Means error, V-REP will unload this plugin
+         std::cout << "Sorry, your CoppeliaSim copy is somewhat old. Cannot start 'OpenGL3Renderer' plugin.\n";
+         unloadSimLibrary(simLib);
+         return(0); // Means error, CoppeliaSim will unload this plugin
      }
 
      // Request Opengl 3.2
@@ -199,8 +199,8 @@ VREP_DLLEXPORT unsigned char v_repStart(void* reservedPointer,int reservedInt)
      return(2);  // initialization went fine, return the version number of this plugin!
 }
 
-VREP_DLLEXPORT void v_repEnd()
-{ // This is called just once, at the end of V-REP
+SIM_DLLEXPORT void simEnd()
+{ // This is called just once, at the end of CoppeliaSim
     delete textureContainer;
     delete meshContainer;
     delete lightContainer;
@@ -209,10 +209,10 @@ VREP_DLLEXPORT void v_repEnd()
     if (_qContext != NULL)
         delete _qContext;
     _qContext = NULL;
-    unloadVrepLibrary(vrepLib); // release the library
+    unloadSimLibrary(simLib); // release the library
 }
 
-VREP_DLLEXPORT void* v_repMessage(int message,int* auxiliaryData,void* customData,int* replyData)
+SIM_DLLEXPORT void* simMessage(int message,int* auxiliaryData,void* customData,int* replyData)
 { // This is called quite often. Just watch out for messages/events you want to handle
 
     // This function should not generate any error messages:
@@ -237,7 +237,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
 {
     if (message==sim_message_eventcallback_extrenderer_start)
     {
-        // Collect camera and environment data from V-REP:
+        // Collect camera and environment data from CoppeliaSim:
         void** valPtr=(void**)data;
         resolutionX=((int*)valPtr[0])[0];
         resolutionY=((int*)valPtr[1])[0];
@@ -378,7 +378,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
 
     if (message==sim_message_eventcallback_extrenderer_light)
     {
-        // Collect light data from V-REP (one light at a time):
+        // Collect light data from CoppeliaSim (one light at a time):
         void** valPtr=(void**)data;
         int lightType=((int*)valPtr[0])[0];
         float cutoffAngle=((float*)valPtr[1])[0];
@@ -487,7 +487,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
 
     if (message==sim_message_eventcallback_extrenderer_mesh)
     {
-        // Collect mesh data from V-REP:
+        // Collect mesh data from CoppeliaSim:
         void** valPtr=(void**)data;
         float* vertices=((float*)valPtr[0]);
         int verticesCnt=((int*)valPtr[1])[0];
@@ -523,7 +523,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
             Texture* theTexture=NULL;
             if (textured)
             {
-                // Read some additional data from V-REP (i.e. texture data):
+                // Read some additional data from CoppeliaSim (i.e. texture data):
                 texCoords=((float*)valPtr[9]);
                 texCoordCnt=((int*)valPtr[10])[0];
                 unsigned char* textureBuff=((unsigned char*)valPtr[11]); // RGBA
@@ -713,12 +713,12 @@ void executeRenderCommands(bool windowed,int message,void* data)
     }
 }
 
-VREP_DLLEXPORT void v_repOpenGL3Renderer(int message,void* data)
+SIM_DLLEXPORT void simOpenGL3Renderer(int message,void* data)
 {
     executeRenderCommands(false,message,data);
 }
 
-VREP_DLLEXPORT void v_repOpenGL3RendererWindowed(int message,void* data)
+SIM_DLLEXPORT void simOpenGL3RendererWindowed(int message,void* data)
 {
     executeRenderCommands(true,message,data);
 }

@@ -1,6 +1,6 @@
 #include "light.h"
 #include <QOpenGLExtraFunctions>
-#include "v_repLib.h"
+#include "simLib.h"
 #include <iostream>
 
 #define LIGHT_INIT_USED_COUNT 10
@@ -88,7 +88,7 @@ void Light::initForCamera(int handle, int lightType, C4X4Matrix m, int counter, 
     biasS.prepend(lightName);
     normalBiasS.prepend(lightName);
 
-    // In vrep, you cant set the ambient light per light source.
+    // In CoppeliaSim, you cant set the ambient light per light source.
     camShader->setUniformValue(diffuse, diffuseLight);
     camShader->setUniformValue(specular, specularLight);
     camShader->setUniformValue(constant, constAttenuation);
