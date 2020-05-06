@@ -61,6 +61,13 @@ QVector3D sceneAmbientLight;
 std::vector<Light*> lightsToRender;
 std::vector<Mesh*> meshesToRender;
 
+bool canOutputMsg(int msgType)
+{
+    int plugin_verbosity = sim_verbosity_default;
+    simGetModuleInfo("OpenGL3Renderer",sim_moduleinfo_verbosity,nullptr,&plugin_verbosity);
+    return(plugin_verbosity>=msgType);
+}
+
 void simulationAboutToStart()
 {
     _simulationRunning=true;
@@ -160,12 +167,14 @@ SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
      simLib=loadSimLibrary(temp.c_str());
      if (simLib==NULL)
      {
-         std::cout << "Error, could not find or correctly load the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
+         if (canOutputMsg(sim_verbosity_errors))
+             std::cout << "simExtOpenGL3Renderer error: could not find or correctly load the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
          return(0); // Means error, CoppeliaSim will unload this plugin
      }
      if (getSimProcAddresses(simLib)==0)
      {
-         std::cout << "Error, could not find all required functions in the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
+         if (canOutputMsg(sim_verbosity_errors))
+             std::cout << "simExtOpenGL3Renderer error: could not find all required functions in the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
          unloadSimLibrary(simLib);
          return(0); // Means error, CoppeliaSim will unload this plugin
      }
@@ -177,7 +186,8 @@ SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
      simGetIntegerParameter(sim_intparam_program_version,&simVer);
      if (simVer<30201) // if CoppeliaSim version is smaller than 3.02.01
      {
-         std::cout << "Sorry, your CoppeliaSim copy is somewhat old. Cannot start 'OpenGL3Renderer' plugin.\n";
+         if (canOutputMsg(sim_verbosity_errors))
+             std::cout << "simExtOpenGL3Renderer error: sorry, your CoppeliaSim copy is somewhat old. Cannot start 'OpenGL3Renderer' plugin.\n";
          unloadSimLibrary(simLib);
          return(0); // Means error, CoppeliaSim will unload this plugin
      }
@@ -292,7 +302,10 @@ void executeRenderCommands(bool windowed,int message,void* data)
                 std::string glVersion = std::string((const char*)glGetString(GL_VERSION));
                 float version = std::stof(glVersion);
                 if (version < 3.2)
-                    std::cout << "This renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
+                {
+                    if (canOutputMsg(sim_verbosity_errors))
+                        std::cout << "simExtOpenGL3Renderer error: this renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
+                }
 
                 oglWindow->initGL();
             }
@@ -323,7 +336,10 @@ void executeRenderCommands(bool windowed,int message,void* data)
                 std::string glVersion = std::string((const char*)glGetString(GL_VERSION));
                 float version = std::stof(glVersion);
                 if (version < 3.2)
-                    std::cout << "This renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
+                {
+                    if (canOutputMsg(sim_verbosity_errors))
+                        std::cout << "simExtOpenGL3Renderer error: this renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
+                }
 
                 oglOffscreen->initGL();
             }
