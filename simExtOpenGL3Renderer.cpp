@@ -168,13 +168,13 @@ SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
      if (simLib==NULL)
      {
          if (canOutputMsg(sim_verbosity_errors))
-             std::cout << "simExtOpenGL3Renderer error: could not find or correctly load the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
+             std::cout << "simExtOpenGL3Renderer: error: could not find or correctly load the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
          return(0); // Means error, CoppeliaSim will unload this plugin
      }
      if (getSimProcAddresses(simLib)==0)
      {
          if (canOutputMsg(sim_verbosity_errors))
-             std::cout << "simExtOpenGL3Renderer error: could not find all required functions in the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
+             std::cout << "simExtOpenGL3Renderer: error: could not find all required functions in the CoppeliaSim library. Cannot start 'OpenGL3Renderer' plugin.\n";
          unloadSimLibrary(simLib);
          return(0); // Means error, CoppeliaSim will unload this plugin
      }
@@ -187,7 +187,7 @@ SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
      if (simVer<30201) // if CoppeliaSim version is smaller than 3.02.01
      {
          if (canOutputMsg(sim_verbosity_errors))
-             std::cout << "simExtOpenGL3Renderer error: sorry, your CoppeliaSim copy is somewhat old. Cannot start 'OpenGL3Renderer' plugin.\n";
+             std::cout << "simExtOpenGL3Renderer: error: sorry, your CoppeliaSim copy is somewhat old. Cannot start 'OpenGL3Renderer' plugin.\n";
          unloadSimLibrary(simLib);
          return(0); // Means error, CoppeliaSim will unload this plugin
      }
@@ -304,7 +304,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
                 if (version < 3.2)
                 {
                     if (canOutputMsg(sim_verbosity_errors))
-                        std::cout << "simExtOpenGL3Renderer error: this renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
+                        std::cout << "simExtOpenGL3Renderer: error: this renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
                 }
 
                 oglWindow->initGL();
@@ -338,7 +338,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
                 if (version < 3.2)
                 {
                     if (canOutputMsg(sim_verbosity_errors))
-                        std::cout << "simExtOpenGL3Renderer error: this renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
+                        std::cout << "simExtOpenGL3Renderer: error: this renderer requires atleast OpenGL 3.2. The version available is: " << glVersion << std::endl;
                 }
 
                 oglOffscreen->initGL();
