@@ -1,7 +1,7 @@
 TARGET = simExtOpenGL3Renderer
 TEMPLATE = lib
 DEFINES -= UNICODE
-CONFIG += shared
+CONFIG += shared plugin
 QT     += widgets opengl printsupport #printsupport required from MacOS, otherwise crashes strangely ('This CONFIG += shared
 
 win32 {
