@@ -1,7 +1,7 @@
 #ifndef LIGHT_H
 #define LIGHT_H
 
-#include <Vector.h>
+#include <vector>
 #include "4X4Matrix.h"
 #include <QVector3D>
 #include "shaderProgram.h"
