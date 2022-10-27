@@ -1,4 +1,5 @@
 #include "light.h"
+#include "MMatrix.h"
 #include <QOpenGLExtraFunctions>
 #include "simLib.h"
 #include <iostream>
@@ -145,23 +146,11 @@ void Light::setPose(int lightType, C4X4Matrix m, ShaderProgram* camShader){
     // The following instructions have the same effect as gluLookAt()
     m.inverse();
     m.rotateAroundY(3.14159265359f);
-    float m4_[4][4];
-    m.copyTo(m4_);
-    #define SWAP(a,b) {temp=(a);(a)=(b);(b)=temp;}
-    float temp;
-    SWAP(m4_[0][1],m4_[1][0]);
-    SWAP(m4_[0][2],m4_[2][0]);
-    SWAP(m4_[0][3],m4_[3][0]);
-    SWAP(m4_[1][2],m4_[2][1]);
-    SWAP(m4_[1][3],m4_[3][1]);
-    SWAP(m4_[2][3],m4_[3][2]);
-    #undef SWAP
+    
+    CMatrix m4_(m);
+
     // Set the view matrix
-    QMatrix4x4 lightView = QMatrix4x4(
-                m4_[0][0], m4_[1][0], m4_[2][0], m4_[3][0],
-                m4_[0][1], m4_[1][1], m4_[2][1], m4_[3][1],
-                m4_[0][2], m4_[1][2], m4_[2][2], m4_[3][2],
-                m4_[0][3], m4_[1][3], m4_[2][3], m4_[3][3]);
+    QMatrix4x4 lightView = QMatrix4x4(m4_.data.data());
 
     QString direction = ".direction";
     QString position = ".position";

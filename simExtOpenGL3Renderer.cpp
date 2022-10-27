@@ -1,6 +1,7 @@
 #include "simExtOpenGL3Renderer.h"
 #include "simLib.h"
 #include "4X4Matrix.h"
+#include "MMatrix.h"
 #include <iostream>
 #include "openglWindow.h"
 #include "openglOffscreen.h"
@@ -344,24 +345,11 @@ void executeRenderCommands(bool windowed,int message,void* data)
             // The following instructions have the same effect as gluLookAt()
             m4.inverse();
             m4.rotateAroundY(3.14159265359f);
-            float m4_[4][4];
-            m4.copyTo(m4_);
-            #define SWAP(a,b) {temp=(a);(a)=(b);(b)=temp;}
-            float temp;
-            SWAP(m4_[0][1],m4_[1][0]);
-            SWAP(m4_[0][2],m4_[2][0]);
-            SWAP(m4_[0][3],m4_[3][0]);
-            SWAP(m4_[1][2],m4_[2][1]);
-            SWAP(m4_[1][3],m4_[3][1]);
-            SWAP(m4_[2][3],m4_[3][2]);
-            #undef SWAP
+            
+            CMatrix m4_(m4);
 
             // Set the view matrix
-            QMatrix4x4 m44 = QMatrix4x4(
-                        m4_[0][0], m4_[1][0], m4_[2][0], m4_[3][0],
-                        m4_[0][1], m4_[1][1], m4_[2][1], m4_[3][1],
-                        m4_[0][2], m4_[1][2], m4_[2][2], m4_[3][2],
-                        m4_[0][3], m4_[1][3], m4_[2][3], m4_[3][3]);
+            QMatrix4x4 m44 = QMatrix4x4(m4_.data.data());
 
             oglItem->shader->setUniformValue("view", m44);
 
