@@ -106,7 +106,7 @@ void Mesh::store(const C7Vector& tr,float* colors,bool textured,float shadingAng
 void Mesh::renderDepth(ShaderProgram* depthShader)
 {
     // Set the model matrix
-    C4Vector axis=tr.Q.getAngleAndAxisNoChecking();
+    C4Vector axis=tr.Q.getAngleAndAxis();
     QMatrix4x4 mm;
     mm.setToIdentity();
     mm.translate(tr.X(0),tr.X(1),tr.X(2));
@@ -125,7 +125,7 @@ void Mesh::render(ShaderProgram* m_shader)
     float shininess = 48.0f;
 
     // Set the model matrix
-    C4Vector axis=tr.Q.getAngleAndAxisNoChecking();
+    C4Vector axis=tr.Q.getAngleAndAxis();
     QMatrix4x4 mm;
     mm.setToIdentity();
     mm.translate(tr.X(0),tr.X(1),tr.X(2));
