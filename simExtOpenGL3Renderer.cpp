@@ -345,7 +345,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
             // The following instructions have the same effect as gluLookAt()
             m4.inverse();
             m4.rotateAroundY(3.14159265359f);
-            
+
             CMatrix m4_(m4);
 
             // Set the view matrix

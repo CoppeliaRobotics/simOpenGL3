@@ -146,7 +146,7 @@ void Light::setPose(int lightType, C4X4Matrix m, ShaderProgram* camShader){
     // The following instructions have the same effect as gluLookAt()
     m.inverse();
     m.rotateAroundY(3.14159265359f);
-    
+
     CMatrix m4_(m);
 
     // Set the view matrix
