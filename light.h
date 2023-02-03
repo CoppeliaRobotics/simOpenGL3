@@ -2,7 +2,7 @@
 #define LIGHT_H
 
 #include <vector>
-#include "4X4Matrix.h"
+#include <simMath/4X4Matrix.h>
 #include <QVector3D>
 #include "shaderProgram.h"
 #include "light.h"

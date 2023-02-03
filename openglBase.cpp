@@ -1,5 +1,5 @@
 #include "openglBase.h"
-#include "MyMath.h"
+#include <simMath/MyMath.h>
 #include <iostream>
 #include <QOpenGLExtraFunctions>
 

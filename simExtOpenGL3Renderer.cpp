@@ -1,7 +1,7 @@
 #include "simExtOpenGL3Renderer.h"
-#include "simLib.h"
-#include "4X4Matrix.h"
-#include "MMatrix.h"
+#include <simLib.h>
+#include <simMath/4X4Matrix.h>
+#include <simMath/MMatrix.h>
 #include <iostream>
 #include "openglWindow.h"
 #include "openglOffscreen.h"

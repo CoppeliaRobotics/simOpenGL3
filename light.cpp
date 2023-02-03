@@ -1,7 +1,7 @@
 #include "light.h"
-#include "MMatrix.h"
+#include <simMath/MMatrix.h>
 #include <QOpenGLExtraFunctions>
-#include "simLib.h"
+#include <simLib.h>
 #include <iostream>
 
 #define LIGHT_INIT_USED_COUNT 10

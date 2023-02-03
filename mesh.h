@@ -2,7 +2,7 @@
 #define MESH_H
 
 #include <vector>
-#include "7Vector.h"
+#include <simMath/7Vector.h>
 #include "texture.h"
 #include <QOpenGLBuffer>
 #include <QOpenGLVertexArrayObject>
