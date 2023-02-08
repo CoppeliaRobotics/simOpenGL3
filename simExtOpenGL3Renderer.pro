@@ -50,7 +50,7 @@ unix:!macx {
 INCLUDEPATH += "../include"
 
 SOURCES += \
-    ../include/simLib.cpp \
+    ../include/simLib/simLib.cpp \
     light.cpp \
     mesh.cpp \
     openglWindow.cpp \
@@ -70,7 +70,7 @@ SOURCES += \
     ../include/simMath/MMatrix.cpp \
 
 HEADERS +=\
-    ../include/simLib.h \
+    ../include/simLib/simLib.h \
     container.h \
     light.h \
     mesh.h \
