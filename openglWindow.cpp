@@ -1,5 +1,5 @@
 #include "openglWindow.h"
-#include <simMath/MyMath.h>
+#include <simMath/mathFuncs.h>
 #include <QResizeEvent>
 #include <iostream>
 #include <QOpenGLFramebufferObject>

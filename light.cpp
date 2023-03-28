@@ -1,5 +1,5 @@
 #include "light.h"
-#include <simMath/MMatrix.h>
+#include <simMath/mXnMatrix.h>
 #include <QOpenGLExtraFunctions>
 #include <simLib/simLib.h>
 #include <iostream>
