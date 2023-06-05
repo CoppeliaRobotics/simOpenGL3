@@ -1,4 +1,4 @@
-# simExtOpenGL3Renderer
+# simOpenGL3
 CoppeliaSim external renderer plugin that uses OpenGL 3+ and supports shadows.
 
 There are a number of things to be aware of when including lighting in your scene using this renderer:

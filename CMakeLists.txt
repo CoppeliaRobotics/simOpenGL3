@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(simExtOpenGL3Renderer)
+project(simOpenGL3)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_MACOSX_RPATH 1)
@@ -21,10 +21,10 @@ list(APPEND CMAKE_MODULE_PATH ${COPPELIASIM_INCLUDE_DIR}/cmake)
 find_package(CoppeliaSim 4.5.0.0 REQUIRED)
 
 coppeliasim_add_plugin(
-    simExtOpenGL3Renderer
+    simOpenGL3
     LEGACY
     SOURCES
-    simExtOpenGL3Renderer.cpp
+    simOpenGL3.cpp
     light.cpp
     mesh.cpp
     openglWindow.cpp
@@ -43,4 +43,4 @@ coppeliasim_add_plugin(
     ${COPPELIASIM_INCLUDE_DIR}/simMath/7Vector.cpp
     ${COPPELIASIM_INCLUDE_DIR}/simMath/mathFuncs.cpp
 )
-target_link_libraries(simExtOpenGL3Renderer Qt5::Widgets Qt5::OpenGL Qt5::PrintSupport OpenGL::GL)
+target_link_libraries(simOpenGL3 Qt5::Widgets Qt5::OpenGL Qt5::PrintSupport OpenGL::GL)

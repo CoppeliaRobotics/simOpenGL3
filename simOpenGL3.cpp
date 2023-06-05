@@ -1,4 +1,4 @@
-#include "simExtOpenGL3Renderer.h"
+#include "simOpenGL3.h"
 #include <simLib/simLib.h>
 #include <simMath/4X4Matrix.h>
 #include <simMath/mXnMatrix.h>
@@ -135,12 +135,8 @@ void removeOffscreen(int objectHandle)
     }
 }
 
-SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
-{ // This is called just once, at the start of CoppeliaSim.
-
-    // Dynamically load and bind CoppeliaSim functions:
-     // ******************************************
-     // 1. Figure out this plugin's directory:
+SIM_DLLEXPORT int simInit(const char* pluginName)
+{
      char curDirAndFile[1024];
  #ifdef _WIN32
      _getcwd(curDirAndFile, sizeof(curDirAndFile));
@@ -148,7 +144,7 @@ SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
      getcwd(curDirAndFile, sizeof(curDirAndFile));
  #endif
      std::string currentDirAndPath(curDirAndFile);
-     // 2. Append the CoppeliaSim library's name:
+
      std::string temp(currentDirAndPath);
  #ifdef _WIN32
      temp+="/coppeliaSim.dll";
@@ -157,22 +153,25 @@ SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
  #elif defined (__APPLE__)
      temp+="/libcoppeliaSim.dylib";
  #endif /* __linux || __APPLE__ */
-     // 3. Load the CoppeliaSim library:
+
      simLib=loadSimLibrary(temp.c_str());
      if (simLib==NULL)
      {
-        printf("simExtOpenGL3Renderer: error: could not find or correctly load the CoppeliaSim library. Cannot start the plugin.\n"); // cannot use simAddLog here.
-         return(0); // Means error, CoppeliaSim will unload this plugin
+        simAddLog(pluginName,sim_verbosity_errors,"could not find or correctly load the CoppeliaSim library. Cannot start the plugin.");
+         return(0);
      }
      if (getSimProcAddresses(simLib)==0)
      {
-        printf("simExtOpenGL3Renderer: error: could not find all required functions in the CoppeliaSim library. Cannot start the plugin.\n"); // cannot use simAddLog here.
+        simAddLog(pluginName,sim_verbosity_errors,"could not find all required functions in the CoppeliaSim library. Cannot start the plugin.");
          unloadSimLibrary(simLib);
-         return(0); // Means error, CoppeliaSim will unload this plugin
+         return(0);
      }
-     // ******************************************
 
+     return(3);  // 3 since CoppeliaSim V4.6
+}
 
+SIM_DLLEXPORT void simInit_ui()
+{
      // Request Opengl 3.2
      QSurfaceFormat glFormat;
      glFormat.setVersion( 3, 2 );
@@ -186,12 +185,10 @@ SIM_DLLEXPORT unsigned char simStart(void* reservedPointer,int reservedInt)
      glFormat.setStencilBufferSize(8);
      glFormat.setDepthBufferSize(24);
      QSurfaceFormat::setDefaultFormat(glFormat);
-
-     return(2);  // initialization went fine, return the version number of this plugin!
 }
 
-SIM_DLLEXPORT void simEnd()
-{ // This is called just once, at the end of CoppeliaSim
+SIM_DLLEXPORT void simCleanup_ui()
+{
     delete textureContainer;
     delete meshContainer;
     delete lightContainer;
@@ -200,28 +197,24 @@ SIM_DLLEXPORT void simEnd()
     if (_qContext != NULL)
         delete _qContext;
     _qContext = NULL;
+}
+
+SIM_DLLEXPORT void simCleanup()
+{
     unloadSimLibrary(simLib); // release the library
 }
 
-SIM_DLLEXPORT void* simMessage(int message,int* auxiliaryData,void* customData,int* replyData)
-{ // This is called quite often. Just watch out for messages/events you want to handle
-
-    // This function should not generate any error messages:
-    int errorModeSaved;
-    simGetInt32Param(sim_intparam_error_report_mode,&errorModeSaved);
-    simSetInt32Param(sim_intparam_error_report_mode,sim_api_errormessage_ignore);
-
-    void* retVal=NULL;
-
+SIM_DLLEXPORT void simMsg(int message,int*,void*)
+{
     if (message==sim_message_eventcallback_simulationabouttostart)
         simulationAboutToStart();
     if (message==sim_message_eventcallback_simulationended)
         simulationEnded();
-    if(message==sim_message_eventcallback_guipass)
-        simulationGuiPass();
+}
 
-    simSetInt32Param(sim_intparam_error_report_mode,errorModeSaved); // restore previous settings
-    return(retVal);
+SIM_DLLEXPORT void simMsg_ui(int message,int*,void*)
+{
+    simulationGuiPass();
 }
 
 void executeRenderCommands(bool windowed,int message,void* data)

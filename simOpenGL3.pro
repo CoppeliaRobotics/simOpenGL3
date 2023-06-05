@@ -1,4 +1,4 @@
-TARGET = simExtOpenGL3Renderer
+TARGET = simOpenGL3
 TEMPLATE = lib
 DEFINES -= UNICODE
 CONFIG += shared plugin
@@ -57,7 +57,7 @@ SOURCES += \
     openglWindow.cpp \
     shaderProgram.cpp \
     texture.cpp \
-    simExtOpenGL3Renderer.cpp \
+    simOpenGL3.cpp \
     frameBufferObject.cpp \
     offscreenGlContext.cpp \
     openglOffscreen.cpp \
@@ -78,7 +78,7 @@ HEADERS +=\
     openglWindow.h \
     shaderProgram.h \
     texture.h \
-    simExtOpenGL3Renderer.h \
+    simOpenGL3.h \
     frameBufferObject.h \
     offscreenGlContext.h \
     openglOffscreen.h \
