@@ -20,7 +20,4 @@ protected:
     // Qt offscreen vars:
     QOpenGLContext* _qContext;
     QOffscreenSurface* _qOffscreenSurface;
-
-    // Qt window vars:
-    QGLWidget* _hiddenWindow;
 };

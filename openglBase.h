@@ -1,7 +1,6 @@
 #ifndef OPENGLBASE_H
 #define OPENGLBASE_H
 
-#include <QGLWidget>
 #include <QGLBuffer>
 #include <QOpenGLShaderProgram>
 #include "mesh.h"
@@ -27,10 +26,8 @@ public:
     ShaderProgram* shader = NULL;
     unsigned int blankTexture, blankTexture2;
 
-//protected:
     int associatedObjectHandle;
     int _resX;
     int _resY;
-
 };
 #endif // OPENGLBASE_H
