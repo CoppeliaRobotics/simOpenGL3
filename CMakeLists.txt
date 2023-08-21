@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.16.3)
 project(simOpenGL3)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -42,4 +42,4 @@ coppeliasim_add_plugin(
     ${COPPELIASIM_INCLUDE_DIR}/simMath/7Vector.cpp
     ${COPPELIASIM_INCLUDE_DIR}/simMath/mathFuncs.cpp
 )
-target_link_libraries(simOpenGL3 Qt5::Widgets Qt5::OpenGL Qt5::PrintSupport OpenGL::GL)
+target_link_libraries(simOpenGL3 PRIVATE Qt5::Widgets Qt5::OpenGL Qt5::PrintSupport OpenGL::GL)
