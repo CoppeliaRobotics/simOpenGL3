@@ -11,8 +11,8 @@ public:
     CFrameBufferObject(int resX,int resY);
     virtual ~CFrameBufferObject();
 
-    void switchToFbo();
-    void switchToNonFbo();
+    void bind();
+    void release();
 
 protected:
     QOpenGLFramebufferObject* _frameBufferObject;

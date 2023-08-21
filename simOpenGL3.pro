@@ -54,7 +54,6 @@ SOURCES += \
     ../include/simLib/simLib.cpp \
     light.cpp \
     mesh.cpp \
-    openglWindow.cpp \
     shaderProgram.cpp \
     texture.cpp \
     simOpenGL3.cpp \
@@ -75,7 +74,6 @@ HEADERS +=\
     container.h \
     light.h \
     mesh.h \
-    openglWindow.h \
     shaderProgram.h \
     texture.h \
     simOpenGL3.h \

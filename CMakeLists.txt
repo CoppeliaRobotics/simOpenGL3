@@ -27,7 +27,6 @@ coppeliasim_add_plugin(
     simOpenGL3.cpp
     light.cpp
     mesh.cpp
-    openglWindow.cpp
     shaderProgram.cpp
     texture.cpp
     frameBufferObject.cpp

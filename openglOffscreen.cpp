@@ -9,7 +9,7 @@ COpenglOffscreen::COpenglOffscreen(int associatedObjectHandle,int resX,int resY,
     _frameBufferObject=new CFrameBufferObject(resX,resY);
     _offscreenContext->doneCurrent();
     _offscreenContext->makeCurrent();
-    _frameBufferObject->switchToFbo();
+    _frameBufferObject->bind();
 }
 
 COpenglOffscreen::~COpenglOffscreen()
@@ -43,12 +43,12 @@ void COpenglOffscreen::doneCurrentContext()
 
 void COpenglOffscreen::bindFramebuffer()
 {
-    _frameBufferObject->switchToFbo();
+    _frameBufferObject->bind();
 }
 
 void COpenglOffscreen::unbindFramebuffer()
 {
-    _frameBufferObject->switchToNonFbo();
+    _frameBufferObject->release();
 }
 
 

@@ -3,7 +3,6 @@
 #include <simMath/4X4Matrix.h>
 #include <simMath/mXnMatrix.h>
 #include <iostream>
-#include "openglWindow.h"
 #include "openglOffscreen.h"
 #include <QCoreApplication>
 #include <algorithm>
@@ -39,10 +38,6 @@ int visionSensorOrCameraId;
 
 int activeDirLightCounter, activePointLightCounter, activeSpotLightCounter;
 
-bool _simulationRunning=false;
-bool _cleanUp=false;
-
-std::vector<OpenglWindow*> oglWindows;
 std::vector<COpenglOffscreen*> oglOffscreens;
 
 COpenglBase* activeBase = NULL;
@@ -51,54 +46,6 @@ QVector3D sceneAmbientLight;
 
 std::vector<Light*> lightsToRender;
 std::vector<Mesh*> meshesToRender;
-
-void simulationAboutToStart()
-{
-    _simulationRunning=true;
-    _cleanUp = false;
-}
-
-void simulationEnded()
-{
-    // This is called from the Sim thread, and so we will have to cleanup later when the UI thread comes through.
-    _simulationRunning=false;
-    _cleanUp = true;
-}
-
-void simulationGuiPass()
-{
-    if (_cleanUp){
-        // Windowed views can only run while simulation is running
-        // Remove shaders
-        delete depthShader;
-        delete omniShader;
-        omniShader = depthShader = NULL;
-
-        // Remove all of the meshes
-        meshContainer->removeAll();
-        textureContainer->removeAll();
-        lightContainer->removeAll();
-
-        // Cleanup all offscreen surfaces and windows
-        for (size_t i=0;i<oglWindows.size();i++)
-            delete oglWindows[i];
-        for (size_t i=0;i<oglOffscreens.size();i++)
-            delete oglOffscreens[i];
-        oglOffscreens.clear();
-        oglWindows.clear();
-        _cleanUp = false;
-    }
-}
-
-OpenglWindow* getWindow(int objectHandle)
-{
-    for (size_t i=0;i<oglWindows.size();i++)
-    {
-        if (oglWindows[i]->getAssociatedObjectHandle()==objectHandle)
-            return(oglWindows[i]);
-    }
-    return(NULL);
-}
 
 COpenglOffscreen* getOffscreen(int objectHandle)
 {
@@ -117,7 +64,7 @@ void removeOffscreen(int objectHandle)
         if (oglOffscreens[i]->getAssociatedObjectHandle()==objectHandle)
         {
             delete lightContainer;
-            lightContainer = new COcContainer<Light>();;
+            lightContainer = new COcContainer<Light>();
             delete oglOffscreens[i];
             oglOffscreens.erase(oglOffscreens.begin()+i);
             return;
@@ -162,14 +109,22 @@ SIM_DLLEXPORT void simInit_ui()
 
 SIM_DLLEXPORT void simCleanup_ui()
 {
+    delete depthShader;
+    delete omniShader;
+
+    for (size_t i=0;i<oglOffscreens.size();i++)
+        delete oglOffscreens[i];
+
+    meshContainer->removeAll();
+    textureContainer->removeAll();
+    lightContainer->removeAll();
+
     delete textureContainer;
     delete meshContainer;
     delete lightContainer;
-    for (size_t i=0;i<oglOffscreens.size();i++)
-        delete oglOffscreens[i];
+
     if (_qContext != NULL)
         delete _qContext;
-    _qContext = NULL;
 }
 
 SIM_DLLEXPORT void simCleanup()
@@ -179,18 +134,13 @@ SIM_DLLEXPORT void simCleanup()
 
 SIM_DLLEXPORT void simMsg(SSimMsg* info)
 {
-    if (info->msgId==sim_message_eventcallback_simulationabouttostart)
-        simulationAboutToStart();
-    if (info->msgId==sim_message_eventcallback_simulationended)
-        simulationEnded();
 }
 
 SIM_DLLEXPORT void simMsg_ui(SSimMsg_ui*)
 {
-    simulationGuiPass();
 }
 
-void executeRenderCommands(bool windowed,int message,void* data)
+void executeRenderCommands(bool,int message,void* data)
 {
     if (message==sim_message_eventcallback_extrenderer_start)
     {
@@ -234,66 +184,33 @@ void executeRenderCommands(bool windowed,int message,void* data)
         }
 
         COpenglBase* oglItem=NULL;
-        if (windowed&&_simulationRunning)
+        COpenglOffscreen* oglOffscreen=getOffscreen(visionSensorOrCameraId);
+        if (oglOffscreen!=NULL)
         {
-            OpenglWindow* oglWindow=getWindow(visionSensorOrCameraId);
-            if (oglWindow==NULL)
+            if (!oglOffscreen->isResolutionSame(resolutionX,resolutionY))
             {
-                oglWindow=new OpenglWindow(visionSensorOrCameraId, _qContext);
-                oglWindow->showAtGivenSizeAndPos(resolutionX,resolutionY,posX,posY);
-
-                oglWindows.push_back(oglWindow);
-
-                oglWindow->makeContextCurrent();
-
-                std::string glVersion = std::string((const char*)glGetString(GL_VERSION));
-                float version = std::stof(glVersion);
-                if (version < 3.2)
-                {
-                    std::string tmp("this renderer requires atleast OpenGL 3.2. The version available is: ");
-                    tmp+=glVersion;
-                    simAddLog("OpenGL3Renderer",sim_verbosity_errors,tmp.c_str());
-                }
-
-                oglWindow->initGL();
+                removeOffscreen(visionSensorOrCameraId);
+                oglOffscreen=NULL;
             }
-            // the window size can change, we return those values:
-            oglWindow->getWindowResolution(resolutionX,resolutionY);
-            ((int*)valPtr[0])[0]=resolutionX;
-            ((int*)valPtr[1])[0]=resolutionY;
-
-            oglItem=oglWindow;
         }
-        else
-        { // non-windowed
-            COpenglOffscreen* oglOffscreen=getOffscreen(visionSensorOrCameraId);
-            if (oglOffscreen!=NULL)
-            {
-                if (!oglOffscreen->isResolutionSame(resolutionX,resolutionY))
-                {
-                    removeOffscreen(visionSensorOrCameraId);
-                    oglOffscreen=NULL;
-                }
-            }
-            if (oglOffscreen==NULL)
-            {
-                oglOffscreen=new COpenglOffscreen(visionSensorOrCameraId,resolutionX,resolutionY, _qContext);
-                oglOffscreens.push_back(oglOffscreen);
+        if (oglOffscreen==NULL)
+        {
+            oglOffscreen=new COpenglOffscreen(visionSensorOrCameraId,resolutionX,resolutionY, _qContext);
+            oglOffscreens.push_back(oglOffscreen);
 
-                oglOffscreen->makeContextCurrent();
-                std::string glVersion = std::string((const char*)glGetString(GL_VERSION));
-                float version = std::stof(glVersion);
-                if (version < 3.2)
-                {
-                    std::string tmp("this renderer requires atleast OpenGL 3.2. The version available is: ");
-                    tmp+=glVersion;
-                    simAddLog("OpenGL3Renderer",sim_verbosity_errors,tmp.c_str());
-                }
-
-                oglOffscreen->initGL();
+            oglOffscreen->makeContextCurrent();
+            std::string glVersion = std::string((const char*)glGetString(GL_VERSION));
+            float version = std::stof(glVersion);
+            if (version < 3.2)
+            {
+                std::string tmp("this renderer requires atleast OpenGL 3.2. The version available is: ");
+                tmp+=glVersion;
+                simAddLog("OpenGL3Renderer",sim_verbosity_errors,tmp.c_str());
             }
-            oglItem=oglOffscreen;
+
+            oglOffscreen->initGL();
         }
+        oglItem=oglOffscreen;
 
         activeBase = oglItem;
 
@@ -404,37 +321,35 @@ void executeRenderCommands(bool windowed,int message,void* data)
             simReleaseBuffer(str);
         }
 
-        if (_simulationRunning||(!windowed))
-        { // Now set-up that light in OpenGl:
-            C4X4Matrix m(lightTranformation.getMatrix());
+        // Now set-up that light in OpenGl:
+        C4X4Matrix m(lightTranformation.getMatrix());
 
-            int counter = 0;
-            if (lightType == sim_light_directional_subtype)
-            {
-                counter = activeDirLightCounter;
-                activeDirLightCounter++;
-            }
-            else if (lightType == sim_light_omnidirectional_subtype)
-            {
-                counter = activePointLightCounter;
-                activePointLightCounter++;
-            }
-            else if (lightType == sim_light_spot_subtype)
-            {
-                counter = activeSpotLightCounter;
-                activeSpotLightCounter++;
-            }
-
-            int totalCount = activeDirLightCounter + activePointLightCounter + activeSpotLightCounter;
-            Light* light = lightContainer->getFromId(lightHandle);
-            if(light == NULL){
-                light = new Light(lightType, shadowTextureSize);
-                lightContainer->add(light);
-            }
-            light->initForCamera(lightHandle, lightType, m, counter, totalCount, colors, constAttenuation, linAttenuation, quadAttenuation, cutoffAngle, spotExponent, nearPlane, farPlane, orthoSize, shadowTextureSize, bias, normalBias, activeBase->shader);
-            light->setPose(lightType, m, activeBase->shader);
-            lightsToRender.push_back(light);
+        int counter = 0;
+        if (lightType == sim_light_directional_subtype)
+        {
+            counter = activeDirLightCounter;
+            activeDirLightCounter++;
         }
+        else if (lightType == sim_light_omnidirectional_subtype)
+        {
+            counter = activePointLightCounter;
+            activePointLightCounter++;
+        }
+        else if (lightType == sim_light_spot_subtype)
+        {
+            counter = activeSpotLightCounter;
+            activeSpotLightCounter++;
+        }
+
+        int totalCount = activeDirLightCounter + activePointLightCounter + activeSpotLightCounter;
+        Light* light = lightContainer->getFromId(lightHandle);
+        if(light == NULL){
+            light = new Light(lightType, shadowTextureSize);
+            lightContainer->add(light);
+        }
+        light->initForCamera(lightHandle, lightType, m, counter, totalCount, colors, constAttenuation, linAttenuation, quadAttenuation, cutoffAngle, spotExponent, nearPlane, farPlane, orthoSize, shadowTextureSize, bias, normalBias, activeBase->shader);
+        light->setPose(lightType, m, activeBase->shader);
+        lightsToRender.push_back(light);
     }
 
     if (message==sim_message_eventcallback_extrenderer_mesh)
@@ -451,7 +366,6 @@ void executeRenderCommands(bool windowed,int message,void* data)
         C7Vector tr(C4Vector((float*)valPtr[7]),C3Vector((float*)valPtr[6]));
         bool textured=((bool*)valPtr[18])[0];
         float shadingAngle=((float*)valPtr[19])[0];
-        unsigned int meshId=((unsigned int*)valPtr[20])[0];
         bool translucid=((bool*)valPtr[21])[0];
         float opacityFactor=((float*)valPtr[22])[0];
         bool backfaceCulling=((bool*)valPtr[23])[0];
@@ -459,49 +373,42 @@ void executeRenderCommands(bool windowed,int message,void* data)
         int texId=((int*)valPtr[25])[0];
         unsigned char* edges=((unsigned char*)valPtr[26]);
         bool visibleEdges=((bool*)valPtr[27])[0];
-        // valPtr[28] is reserved
-        int povPatternType=((int*)valPtr[29])[0]; // pov-ray
-        int displayAttrib=((int*)valPtr[30])[0];
-        const char* colorName=((char*)valPtr[31]);
 
-        if (_simulationRunning||(!windowed))
+        float* texCoords=NULL;
+        int texCoordCnt=0;
+        bool repeatU=false;
+        bool repeatV=false;
+        bool interpolateColors=false;
+        int applyMode=0;
+        Texture* theTexture=NULL;
+        if (textured)
         {
-            float* texCoords=NULL;
-            int texCoordCnt=0;
-            bool repeatU=false;
-            bool repeatV=false;
-            bool interpolateColors=false;
-            int applyMode=0;
-            Texture* theTexture=NULL;
-            if (textured)
-            {
-                // Read some additional data from CoppeliaSim (i.e. texture data):
-                texCoords=((float*)valPtr[9]);
-                texCoordCnt=((int*)valPtr[10])[0];
-                unsigned char* textureBuff=((unsigned char*)valPtr[11]); // RGBA
-                int textureSizeX=((int*)valPtr[12])[0];
-                int textureSizeY=((int*)valPtr[13])[0];
-                repeatU=((bool*)valPtr[14])[0];
-                repeatV=((bool*)valPtr[15])[0];
-                interpolateColors=((bool*)valPtr[16])[0];
-                applyMode=((int*)valPtr[17])[0];
+            // Read some additional data from CoppeliaSim (i.e. texture data):
+            texCoords=((float*)valPtr[9]);
+            texCoordCnt=((int*)valPtr[10])[0];
+            unsigned char* textureBuff=((unsigned char*)valPtr[11]); // RGBA
+            int textureSizeX=((int*)valPtr[12])[0];
+            int textureSizeY=((int*)valPtr[13])[0];
+            repeatU=((bool*)valPtr[14])[0];
+            repeatV=((bool*)valPtr[15])[0];
+            interpolateColors=((bool*)valPtr[16])[0];
+            applyMode=((int*)valPtr[17])[0];
 
-                theTexture=textureContainer->getFromId(texId);
-                if (theTexture==NULL)
-                {
-                    theTexture=new Texture(texId,textureBuff,textureSizeX,textureSizeY);
-                    textureContainer->add(theTexture);
-                }
-            }
-            Mesh* mesh=meshContainer->getFromId(geomId);
-            if (mesh==NULL)
+            theTexture=textureContainer->getFromId(texId);
+            if (theTexture==NULL)
             {
-                mesh=new Mesh(geomId,vertices,verticesCnt*3,indices,triangleCnt*3,normals,normalsCnt*3,texCoords,texCoordCnt*2, edges);
-                meshContainer->add(mesh);
+                theTexture=new Texture(texId,textureBuff,textureSizeX,textureSizeY);
+                textureContainer->add(theTexture);
             }
-            mesh->store(tr,colors,textured,shadingAngle,translucid,opacityFactor,backfaceCulling,repeatU,repeatV,interpolateColors,applyMode,theTexture,visibleEdges);
-            meshesToRender.push_back(mesh);
         }
+        Mesh* mesh=meshContainer->getFromId(geomId);
+        if (mesh==NULL)
+        {
+            mesh=new Mesh(geomId,vertices,verticesCnt*3,indices,triangleCnt*3,normals,normalsCnt*3,texCoords,texCoordCnt*2, edges);
+            meshContainer->add(mesh);
+        }
+        mesh->store(tr,colors,textured,shadingAngle,translucid,opacityFactor,backfaceCulling,repeatU,repeatV,interpolateColors,applyMode,theTexture,visibleEdges);
+        meshesToRender.push_back(mesh);
     }
 
     if (message==sim_message_eventcallback_extrenderer_stop)
@@ -551,7 +458,7 @@ void executeRenderCommands(bool windowed,int message,void* data)
             activeBase->shader->setUniformValue(lightName, 2);
         }
 
-        if (stepsSinceLastShadowMapRender >= oglWindows.size() + oglOffscreens.size()){
+        if (stepsSinceLastShadowMapRender >= oglOffscreens.size()){
             for (int i=0;i<int(lightsToRender.size());i++)
             {
                 ShaderProgram* depthSh = depthShader;
@@ -612,56 +519,38 @@ void executeRenderCommands(bool windowed,int message,void* data)
         lightsToRender.clear();
         meshesToRender.clear();
 
-        if (windowed)
+        COpenglOffscreen* oglOffscreen=getOffscreen(visionSensorOrCameraId);
+        if (oglOffscreen!=NULL)
         {
-            if (_simulationRunning)
+            if (readRgb)
             {
-                OpenglWindow* oglWidget=getWindow(visionSensorOrCameraId);
-                if (oglWidget!=NULL)
+                glPixelStorei(GL_PACK_ALIGNMENT,1);
+                glReadPixels(0,0,resolutionX,resolutionY,GL_RGB,GL_UNSIGNED_BYTE,rgbBuffer);
+                glPixelStorei(GL_PACK_ALIGNMENT,4);
+            }
+            if (readDepth)
+            {
+                glReadPixels(0,0,resolutionX,resolutionY,GL_DEPTH_COMPONENT,GL_FLOAT,depthBuffer);
+                // Convert this depth info into values corresponding to linear depths (if perspective mode):
+                if (perspectiveOperation)
                 {
-                    if(oglWidget->isExposed())
-                        oglWidget->swapBuffers();
+                    float farMinusNear= farClippingPlane-nearClippingPlane;
+                    float farDivFarMinusNear=farClippingPlane/farMinusNear;
+                    float nearTimesFar=nearClippingPlane*farClippingPlane;
+                    int v=resolutionX*resolutionY;
+                    for (int i=0;i<v;i++)
+                        depthBuffer[i]=((nearTimesFar/(farMinusNear*(farDivFarMinusNear-depthBuffer[i])))-nearClippingPlane)/farMinusNear;
                 }
             }
-        }
-        else
-        {
-            COpenglOffscreen* oglOffscreen=getOffscreen(visionSensorOrCameraId);
-            if (oglOffscreen!=NULL)
-            {
-                if (readRgb)
-                {
-                    glPixelStorei(GL_PACK_ALIGNMENT,1);
-                    glReadPixels(0,0,resolutionX,resolutionY,GL_RGB,GL_UNSIGNED_BYTE,rgbBuffer);
-                    glPixelStorei(GL_PACK_ALIGNMENT,4);
-                }
-                if (readDepth)
-                {
-                    glReadPixels(0,0,resolutionX,resolutionY,GL_DEPTH_COMPONENT,GL_FLOAT,depthBuffer);
-                    // Convert this depth info into values corresponding to linear depths (if perspective mode):
-                    if (perspectiveOperation)
-                    {
-                        float farMinusNear= farClippingPlane-nearClippingPlane;
-                        float farDivFarMinusNear=farClippingPlane/farMinusNear;
-                        float nearTimesFar=nearClippingPlane*farClippingPlane;
-                        int v=resolutionX*resolutionY;
-                        for (int i=0;i<v;i++)
-                            depthBuffer[i]=((nearTimesFar/(farMinusNear*(farDivFarMinusNear-depthBuffer[i])))-nearClippingPlane)/farMinusNear;
-                    }
-                }
-                oglOffscreen->unbindFramebuffer();
-            }
+            oglOffscreen->unbindFramebuffer();
         }
 
-        if (_simulationRunning||(!windowed))
-        {
-            meshContainer->decrementAllUsedCount();
-            meshContainer->removeAllUnused();
-            textureContainer->decrementAllUsedCount();
-            textureContainer->removeAllUnused();
-            lightContainer->decrementAllUsedCount();
-            lightContainer->removeAllUnused();
-        }
+        meshContainer->decrementAllUsedCount();
+        meshContainer->removeAllUnused();
+        textureContainer->decrementAllUsedCount();
+        textureContainer->removeAllUnused();
+        lightContainer->decrementAllUsedCount();
+        lightContainer->removeAllUnused();
     }
 }
 
@@ -669,9 +558,3 @@ SIM_DLLEXPORT void simOpenGL3Renderer(int message,void* data)
 {
     executeRenderCommands(false,message,data);
 }
-
-SIM_DLLEXPORT void simOpenGL3RendererWindowed(int message,void* data)
-{
-    executeRenderCommands(true,message,data);
-}
-

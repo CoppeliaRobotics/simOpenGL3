@@ -11,5 +11,4 @@ SIM_DLLEXPORT void simInit_ui();
 SIM_DLLEXPORT void simMsg_ui(SSimMsg_ui*);
 SIM_DLLEXPORT void simCleanup_ui();
 
-SIM_DLLEXPORT void simExtRenderer(int message,void* data);
-SIM_DLLEXPORT void simExtRendererWindowed(int message,void* data);
+SIM_DLLEXPORT void simOpenGL3Renderer(int message,void* data);

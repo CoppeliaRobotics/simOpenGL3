@@ -9,16 +9,16 @@ CFrameBufferObject::CFrameBufferObject(int resX,int resY) : QObject()
 
 CFrameBufferObject::~CFrameBufferObject()
 {
-    switchToNonFbo();
+    release();
     delete _frameBufferObject;
 }
 
-void CFrameBufferObject::switchToFbo()
+void CFrameBufferObject::bind()
 {
     _frameBufferObject->bind();
 }
 
-void CFrameBufferObject::switchToNonFbo()
+void CFrameBufferObject::release()
 {
     _frameBufferObject->release();
 }
