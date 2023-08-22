@@ -10,24 +10,14 @@ COpenglBase::COpenglBase(int associatedObjectHandle)
 
 COpenglBase::~COpenglBase()
 {
+    glDeleteTextures(1,&blankTexture2);
+    glDeleteTextures(1,&blankTexture);
     delete shader;
 }
 
 int COpenglBase::getAssociatedObjectHandle()
 {
     return(associatedObjectHandle);
-}
-
-void COpenglBase::makeContextCurrent()
-{
-}
-
-void COpenglBase::doneCurrentContext()
-{
-}
-
-void COpenglBase::bindFramebuffer()
-{
 }
 
 void COpenglBase::initGL()
@@ -65,9 +55,7 @@ void COpenglBase::clearBuffers(float viewAngle,float orthoViewSize,float nearCli
             m_proj.perspective(a, ratio, nearClippingPlane,farClippingPlane);
         }
         else
-        {
             m_proj.perspective(viewAngle*radToDeg, ratio, nearClippingPlane,farClippingPlane);
-        }
     }
     else
     {

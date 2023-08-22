@@ -8,7 +8,7 @@
 class COpenglOffscreen : public COpenglBase
 {
 public:
-    COpenglOffscreen(int associatedObjectHandle,int resX,int resY, QOpenGLContext* qCont);
+    COpenglOffscreen(int associatedObjectHandle,int resX,int resY,void* otherWidgetToShareResourcesWith,bool usingQGLWidget);
     ~COpenglOffscreen();
 
     void initGL();

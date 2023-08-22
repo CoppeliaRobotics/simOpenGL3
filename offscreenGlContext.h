@@ -10,7 +10,7 @@ class COffscreenGlContext : public QObject
     Q_OBJECT
 public:
 
-    COffscreenGlContext(int resX,int resY, QOpenGLContext* );
+    COffscreenGlContext(int resX,int resY,void* otherWidgetToShareResourcesWith,bool usingQGLWidget);
     virtual ~COffscreenGlContext();
 
     bool makeCurrent();

@@ -1,15 +1,14 @@
 #include "openglOffscreen.h"
 #include <iostream>
 
-COpenglOffscreen::COpenglOffscreen(int associatedObjectHandle,int resX,int resY, QOpenGLContext* qCont) : COpenglBase(associatedObjectHandle)
+COpenglOffscreen::COpenglOffscreen(int associatedObjectHandle,int resX,int resY,void* otherWidgetToShareResourcesWith,bool usingQGLWidget) : COpenglBase(associatedObjectHandle)
 {
     _resX=resX;
     _resY=resY;
-    _offscreenContext=new COffscreenGlContext(resX,resY, qCont);
+    _offscreenContext=new COffscreenGlContext(resX,resY,otherWidgetToShareResourcesWith,usingQGLWidget);
     _frameBufferObject=new CFrameBufferObject(resX,resY);
-    _offscreenContext->doneCurrent();
-    _offscreenContext->makeCurrent();
     _frameBufferObject->bind();
+    initGL();
 }
 
 COpenglOffscreen::~COpenglOffscreen()

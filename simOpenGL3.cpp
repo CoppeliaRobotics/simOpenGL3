@@ -16,7 +16,7 @@
 
 LIBRARY simLib;
 
-// Shadeers to be shared between all surfaces.
+// Shaders to be shared between all surfaces.
 ShaderProgram* depthShader = NULL;
 ShaderProgram* omniShader = NULL;
 
@@ -25,24 +25,19 @@ COcContainer<Mesh>* meshContainer = new COcContainer<Mesh>();
 COcContainer<Texture>* textureContainer = new COcContainer<Texture>();
 COcContainer<Light>* lightContainer = new COcContainer<Light>();
 
-int stepsSinceLastShadowMapRender = 99;
-
-QOpenGLContext* _qContext = NULL;
-
 int resolutionX;
 int resolutionY;
 float nearClippingPlane;
 float farClippingPlane;
 bool perspectiveOperation;
 int visionSensorOrCameraId;
+bool usingQGLWidget;
+bool instanceSwitched=false;
 
 int activeDirLightCounter, activePointLightCounter, activeSpotLightCounter;
 
 std::vector<COpenglOffscreen*> oglOffscreens;
-
-COpenglBase* activeBase = NULL;
-
-QVector3D sceneAmbientLight;
+COpenglOffscreen* currentOffscreen = NULL;
 
 std::vector<Light*> lightsToRender;
 std::vector<Mesh*> meshesToRender;
@@ -67,53 +62,54 @@ void removeOffscreen(int objectHandle)
             lightContainer = new COcContainer<Light>();
             delete oglOffscreens[i];
             oglOffscreens.erase(oglOffscreens.begin()+i);
-            return;
+            break;
         }
     }
 }
 
 SIM_DLLEXPORT int simInit(SSimInit* info)
 {
-     simLib=loadSimLibrary(info->coppeliaSimLibPath);
-     if (simLib==NULL)
-     {
+    simLib=loadSimLibrary(info->coppeliaSimLibPath);
+    if (simLib==NULL)
+    {
         simAddLog(info->pluginName,sim_verbosity_errors,"could not find or correctly load the CoppeliaSim library. Cannot start the plugin.");
-         return(0);
-     }
-     if (getSimProcAddresses(simLib)==0)
-     {
+        return(0);
+    }
+    if (getSimProcAddresses(simLib)==0)
+    {
         simAddLog(info->pluginName,sim_verbosity_errors,"could not find all required functions in the CoppeliaSim library. Cannot start the plugin.");
-         unloadSimLibrary(simLib);
-         return(0);
-     }
+        unloadSimLibrary(simLib);
+        return(0);
+    }
 
-     return(3);  // 3 since CoppeliaSim V4.6
+    usingQGLWidget=simGetBoolParam(sim_boolparam_qglwidget)!=0;
+
+    return(3);  // 3 since CoppeliaSim V4.6
 }
 
 SIM_DLLEXPORT void simInit_ui()
 {
-     // Request Opengl 3.2
-     QSurfaceFormat glFormat;
-     glFormat.setVersion( 3, 2 );
-     glFormat.setProfile( QSurfaceFormat::CoreProfile );
-     glFormat.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
-     glFormat.setRenderableType(QSurfaceFormat::OpenGL);
-     glFormat.setRedBufferSize(8);
-     glFormat.setGreenBufferSize(8);
-     glFormat.setBlueBufferSize(8);
-     glFormat.setAlphaBufferSize(0);
-     glFormat.setStencilBufferSize(8);
-     glFormat.setDepthBufferSize(24);
-     QSurfaceFormat::setDefaultFormat(glFormat);
+    if (usingQGLWidget)
+    {
+        QSurfaceFormat glFormat;
+        glFormat.setVersion(3,2);
+        glFormat.setProfile(QSurfaceFormat::CoreProfile);
+        glFormat.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+        glFormat.setRenderableType(QSurfaceFormat::OpenGL);
+        glFormat.setRedBufferSize(8);
+        glFormat.setGreenBufferSize(8);
+        glFormat.setBlueBufferSize(8);
+        glFormat.setAlphaBufferSize(0);
+        glFormat.setStencilBufferSize(8);
+        glFormat.setDepthBufferSize(24);
+        QSurfaceFormat::setDefaultFormat(glFormat);
+    }
 }
 
 SIM_DLLEXPORT void simCleanup_ui()
 {
     delete depthShader;
     delete omniShader;
-
-    for (size_t i=0;i<oglOffscreens.size();i++)
-        delete oglOffscreens[i];
 
     meshContainer->removeAll();
     textureContainer->removeAll();
@@ -123,8 +119,8 @@ SIM_DLLEXPORT void simCleanup_ui()
     delete meshContainer;
     delete lightContainer;
 
-    if (_qContext != NULL)
-        delete _qContext;
+    for (size_t i=0;i<oglOffscreens.size();i++)
+        delete oglOffscreens[i];
 }
 
 SIM_DLLEXPORT void simCleanup()
@@ -134,10 +130,25 @@ SIM_DLLEXPORT void simCleanup()
 
 SIM_DLLEXPORT void simMsg(SSimMsg* info)
 {
+    if (info->msgId==sim_message_eventcallback_instanceswitch)
+        instanceSwitched=true;
 }
 
 SIM_DLLEXPORT void simMsg_ui(SSimMsg_ui*)
 {
+    if (instanceSwitched)
+    {
+        instanceSwitched=false;
+
+        meshContainer->removeAll();
+        textureContainer->removeAll();
+        lightContainer->removeAll();
+
+        for (size_t i=0;i<oglOffscreens.size();i++)
+            delete oglOffscreens[i];
+
+        oglOffscreens.clear();
+    }
 }
 
 void executeRenderCommands(bool,int message,void* data)
@@ -156,12 +167,6 @@ void executeRenderCommands(bool,int message,void* data)
         float* amb=(float*)valPtr[11];
         C7Vector cameraTranformation(C4Vector((float*)valPtr[4]),C3Vector((float*)valPtr[3]));
         C4X4Matrix m4(cameraTranformation.getMatrix());
-        float* fogBackgroundColor=(float*)valPtr[12];
-        int fogType=((int*)valPtr[13])[0];
-        float fogStart=((float*)valPtr[14])[0];
-        float fogEnd=((float*)valPtr[15])[0];
-        float fogDensity=((float*)valPtr[16])[0];
-        bool fogEnabled=((bool*)valPtr[17])[0];
         float orthoViewSize=((float*)valPtr[18])[0];
         visionSensorOrCameraId=((int*)valPtr[19])[0];
         int posX=0;
@@ -171,34 +176,28 @@ void executeRenderCommands(bool,int message,void* data)
             posX=((int*)valPtr[20])[0];
             posY=((int*)valPtr[21])[0];
         }
-        float fogDistance=((float*)valPtr[22])[0]; // pov-ray
-        float fogTransp=((float*)valPtr[23])[0]; // pov-ray
-        bool povFocalBlurEnabled=((bool*)valPtr[24])[0]; // pov-ray
-        float povFocalDistance=((float*)valPtr[25])[0]; // pov-ray
-        float povAperture=((float*)valPtr[26])[0]; // pov-ray
-        int povBlurSamples=((int*)valPtr[27])[0]; // pov-ray
 
-        if (_qContext == NULL){
-            _qContext = new QOpenGLContext();
-            _qContext->create();
-        }
-
-        COpenglBase* oglItem=NULL;
-        COpenglOffscreen* oglOffscreen=getOffscreen(visionSensorOrCameraId);
-        if (oglOffscreen!=NULL)
+        currentOffscreen=getOffscreen(visionSensorOrCameraId);
+        if (currentOffscreen!=NULL)
         {
-            if (!oglOffscreen->isResolutionSame(resolutionX,resolutionY))
+            if (!currentOffscreen->isResolutionSame(resolutionX,resolutionY))
             {
                 removeOffscreen(visionSensorOrCameraId);
-                oglOffscreen=NULL;
+                currentOffscreen=NULL;
+                meshContainer->removeAll();
+                textureContainer->removeAll();
+                lightContainer->removeAll();
             }
         }
-        if (oglOffscreen==NULL)
+        if (currentOffscreen==NULL)
         {
-            oglOffscreen=new COpenglOffscreen(visionSensorOrCameraId,resolutionX,resolutionY, _qContext);
-            oglOffscreens.push_back(oglOffscreen);
+            currentOffscreen=new COpenglOffscreen(visionSensorOrCameraId,resolutionX,resolutionY,valPtr[28],usingQGLWidget);
+            oglOffscreens.push_back(currentOffscreen);
+        }
 
-            oglOffscreen->makeContextCurrent();
+        if (currentOffscreen!=NULL)
+        {
+            currentOffscreen->makeContextCurrent();
             std::string glVersion = std::string((const char*)glGetString(GL_VERSION));
             float version = std::stof(glVersion);
             if (version < 3.2)
@@ -208,22 +207,16 @@ void executeRenderCommands(bool,int message,void* data)
                 simAddLog("OpenGL3Renderer",sim_verbosity_errors,tmp.c_str());
             }
 
-            oglOffscreen->initGL();
-        }
-        oglItem=oglOffscreen;
+        //    currentOffscreen->initGL();
 
-        activeBase = oglItem;
+            if (omniShader == NULL)
+            {
+                depthShader = new ShaderProgram(":/shadows/depth.vert", ":/shadows/depth.frag", "");
+                omniShader = new ShaderProgram(":/shadows/omni_depth.vert", ":/shadows/omni_depth.frag", "");
+            }
 
-        if (omniShader == NULL)
-        {
-            depthShader = new ShaderProgram(":/shadows/depth.vert", ":/shadows/depth.frag", "");
-            omniShader = new ShaderProgram(":/shadows/omni_depth.vert", ":/shadows/omni_depth.frag", "");
-        }
-
-        if (oglItem!=NULL)
-        {
-            oglItem->makeContextCurrent();
-            oglItem->clearBuffers(viewAngle,orthoViewSize,nearClippingPlane,farClippingPlane,perspectiveOperation,backgroundColor);
+            currentOffscreen->makeContextCurrent();
+            currentOffscreen->clearBuffers(viewAngle,orthoViewSize,nearClippingPlane,farClippingPlane,perspectiveOperation,backgroundColor);
 
             // The following instructions have the same effect as gluLookAt()
             m4.inverse();
@@ -234,10 +227,10 @@ void executeRenderCommands(bool,int message,void* data)
             // Set the view matrix
             QMatrix4x4 m44 = QMatrix4x4(m4_.data.data());
 
-            oglItem->shader->setUniformValue("view", m44);
+            currentOffscreen->shader->setUniformValue("view", m44);
 
             QVector3D sceneAmbientLight = QVector3D(amb[0],amb[1],amb[2]);
-            oglItem->shader->setUniformValue("sceneAmbient", sceneAmbientLight);
+            currentOffscreen->shader->setUniformValue("sceneAmbient", sceneAmbientLight);
 
             activeDirLightCounter=0;
             activePointLightCounter=0;
@@ -245,7 +238,7 @@ void executeRenderCommands(bool,int message,void* data)
         }
     }
 
-    if (message==sim_message_eventcallback_extrenderer_light)
+    if ( (message==sim_message_eventcallback_extrenderer_light)&&(currentOffscreen!=nullptr) )
     {
         // Collect light data from CoppeliaSim (one light at a time):
         void** valPtr=(void**)data;
@@ -257,10 +250,6 @@ void executeRenderCommands(bool,int message,void* data)
         float linAttenuation=((float*)valPtr[5])[0];
         float quadAttenuation=((float*)valPtr[6])[0];
         C7Vector lightTranformation(C4Vector((float*)valPtr[8]),C3Vector((float*)valPtr[7]));
-        float lightSize=((float*)valPtr[9])[0];
-        float FadeXDistance=((float*)valPtr[10])[0]; // Pov-ray
-        bool lightIsVisible=((bool*)valPtr[11])[0];
-        bool noShadow=((bool*)valPtr[12])[0]; // Pov-ray
         int lightHandle=((int*)valPtr[13])[0];
 
         float nearPlane=0.01f;
@@ -282,7 +271,7 @@ void executeRenderCommands(bool,int message,void* data)
 
 
         // Have the shadow map scale based on the render resolution.
-        int shadowTextureSize=std::max(activeBase->_resX,activeBase->_resY) * 4;
+        int shadowTextureSize=std::max(currentOffscreen->_resX,currentOffscreen->_resY) * 4;
 
         char* str=simGetExtensionString(lightHandle,-1,"nearPlane@lightProjection@openGL3");
         if (str!=nullptr)
@@ -343,16 +332,17 @@ void executeRenderCommands(bool,int message,void* data)
 
         int totalCount = activeDirLightCounter + activePointLightCounter + activeSpotLightCounter;
         Light* light = lightContainer->getFromId(lightHandle);
-        if(light == NULL){
+        if(light == NULL)
+        {
             light = new Light(lightType, shadowTextureSize);
             lightContainer->add(light);
         }
-        light->initForCamera(lightHandle, lightType, m, counter, totalCount, colors, constAttenuation, linAttenuation, quadAttenuation, cutoffAngle, spotExponent, nearPlane, farPlane, orthoSize, shadowTextureSize, bias, normalBias, activeBase->shader);
-        light->setPose(lightType, m, activeBase->shader);
+        light->initForCamera(lightHandle, lightType, m, counter, totalCount, colors, constAttenuation, linAttenuation, quadAttenuation, cutoffAngle, spotExponent, nearPlane, farPlane, orthoSize, shadowTextureSize, bias, normalBias, currentOffscreen->shader);
+        light->setPose(lightType, m, currentOffscreen->shader);
         lightsToRender.push_back(light);
     }
 
-    if (message==sim_message_eventcallback_extrenderer_mesh)
+    if ( (message==sim_message_eventcallback_extrenderer_mesh)&&(currentOffscreen!=nullptr) )
     {
         // Collect mesh data from CoppeliaSim:
         void** valPtr=(void**)data;
@@ -411,7 +401,7 @@ void executeRenderCommands(bool,int message,void* data)
         meshesToRender.push_back(mesh);
     }
 
-    if (message==sim_message_eventcallback_extrenderer_stop)
+    if ( (message==sim_message_eventcallback_extrenderer_stop)&&(currentOffscreen!=nullptr) )
     {
         void** valPtr=(void**)data;
         unsigned char* rgbBuffer=((unsigned char*)valPtr[0]);
@@ -424,57 +414,56 @@ void executeRenderCommands(bool,int message,void* data)
 #endif
 
         if(activeDirLightCounter == 0)
-            activeBase->shader->setUniformValue("dirLightLen", 0);
+            currentOffscreen->shader->setUniformValue("dirLightLen", 0);
         if(activePointLightCounter == 0)
-            activeBase->shader->setUniformValue("pointLightLen", 0);
+            currentOffscreen->shader->setUniformValue("pointLightLen", 0);
         if(activeSpotLightCounter == 0)
-            activeBase->shader->setUniformValue("spotLightLen", 0);
+            currentOffscreen->shader->setUniformValue("spotLightLen", 0);
 
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, activeBase->blankTexture);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, currentOffscreen->blankTexture);
 
         // Bind all of the Sampler2D and SampleCubes to an empty texture.
         int totalCount = activeDirLightCounter + activePointLightCounter + activeSpotLightCounter;
-        for (int i = 0; i < MAX_LIGHTS; i++){
+        for (int i = 0; i < MAX_LIGHTS; i++)
+        {
             QString depthCubeMaps = "depthCubeMap";
             depthCubeMaps.append(QString::number(i));
-            activeBase->shader->setUniformValue(depthCubeMaps, 1);
+            currentOffscreen->shader->setUniformValue(depthCubeMaps, 1);
         }
 
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, activeBase->blankTexture2);
+        glBindTexture(GL_TEXTURE_2D, currentOffscreen->blankTexture2);
 
-        for (int i = 0; i < MAX_LIGHTS; i++){
+        for (int i = 0; i < MAX_LIGHTS; i++)
+        {
             QString lightName = "spotLight";
             lightName.append(QString::number(i));
             lightName.append(".shadowMap");
-            activeBase->shader->setUniformValue(lightName, 2);
+            currentOffscreen->shader->setUniformValue(lightName, 2);
         }
 
-        for (int i = 0; i < MAX_LIGHTS; i++){
+        for (int i = 0; i < MAX_LIGHTS; i++)
+        {
             QString lightName = "dirLight";
             lightName.append(QString::number(i));
             lightName.append(".shadowMap");
-            activeBase->shader->setUniformValue(lightName, 2);
+            currentOffscreen->shader->setUniformValue(lightName, 2);
         }
 
-        if (stepsSinceLastShadowMapRender >= oglOffscreens.size()){
-            for (int i=0;i<int(lightsToRender.size());i++)
-            {
-                ShaderProgram* depthSh = depthShader;
-                if (lightsToRender[i]->lightType == sim_light_omnidirectional_subtype)
-                    depthSh = omniShader;
+        for (int i=0;i<int(lightsToRender.size());i++)
+        {
+            ShaderProgram* depthSh = depthShader;
+            if (lightsToRender[i]->lightType == sim_light_omnidirectional_subtype)
+                depthSh = omniShader;
 
-                lightsToRender[i]->renderDepthFromLight(depthSh, meshesToRender);
-            }
-            stepsSinceLastShadowMapRender = 0;
+            lightsToRender[i]->renderDepthFromLight(depthSh, meshesToRender);
         }
-        stepsSinceLastShadowMapRender++;
 
-        activeBase->makeContextCurrent();
-        activeBase->bindFramebuffer();
-        activeBase->clearViewport();
-        activeBase->shader->bind();
+        currentOffscreen->makeContextCurrent();
+        currentOffscreen->bindFramebuffer();
+        currentOffscreen->clearViewport();
+        currentOffscreen->shader->bind();
 
         // It seems Sampler2Ds and SamplerCubes cant match to the same ID
         int omnis_seen = 0;
@@ -485,25 +474,31 @@ void executeRenderCommands(bool,int message,void* data)
         for (int i=0;i<int(lightsToRender.size());i++)
         {
             glActiveTexture(GL_TEXTURE3 + i);
-            if (lightsToRender[i]->lightType == sim_light_omnidirectional_subtype){
+            if (lightsToRender[i]->lightType == sim_light_omnidirectional_subtype)
+            {
                 glBindTexture(GL_TEXTURE_CUBE_MAP, lightsToRender[i]->depthMap);
                 QString depthCubeMaps = "depthCubeMap";
                 depthCubeMaps.append(QString::number(omnis_seen));
-                activeBase->shader->setUniformValue(depthCubeMaps, 3+i);
+                currentOffscreen->shader->setUniformValue(depthCubeMaps, 3+i);
                 omnis_seen += 1;
-            }else{
+            }
+            else
+            {
                 glBindTexture(GL_TEXTURE_2D, lightsToRender[i]->depthMap);
-                if(lightsToRender[i]->lightType == sim_light_spot_subtype){
+                if(lightsToRender[i]->lightType == sim_light_spot_subtype)
+                {
                     QString lightName = "spotLight";
                     lightName.append(QString::number(spots_seen));
                     lightName.append(".shadowMap");
-                    activeBase->shader->setUniformValue(lightName, 3+i);
+                    currentOffscreen->shader->setUniformValue(lightName, 3+i);
                     spots_seen += 1;
-                }else if (lightsToRender[i]->lightType == sim_light_directional_subtype) {
+                }
+                else if (lightsToRender[i]->lightType == sim_light_directional_subtype)
+                {
                     QString lightName = "dirLight";
                     lightName.append(QString::number(dir_seen));
                     lightName.append(".shadowMap");
-                    activeBase->shader->setUniformValue(lightName, 3+i);
+                    currentOffscreen->shader->setUniformValue(lightName, 3+i);
                     dir_seen += 1;
                 }
             }
@@ -512,38 +507,33 @@ void executeRenderCommands(bool,int message,void* data)
         glActiveTexture(GL_TEXTURE0);
 
         for (size_t i=0;i<meshesToRender.size();i++)
-        {
-            meshesToRender[i]->render(activeBase->shader);
-        }
+            meshesToRender[i]->render(currentOffscreen->shader);
 
         lightsToRender.clear();
         meshesToRender.clear();
 
-        COpenglOffscreen* oglOffscreen=getOffscreen(visionSensorOrCameraId);
-        if (oglOffscreen!=NULL)
+        if (readRgb)
         {
-            if (readRgb)
-            {
-                glPixelStorei(GL_PACK_ALIGNMENT,1);
-                glReadPixels(0,0,resolutionX,resolutionY,GL_RGB,GL_UNSIGNED_BYTE,rgbBuffer);
-                glPixelStorei(GL_PACK_ALIGNMENT,4);
-            }
-            if (readDepth)
-            {
-                glReadPixels(0,0,resolutionX,resolutionY,GL_DEPTH_COMPONENT,GL_FLOAT,depthBuffer);
-                // Convert this depth info into values corresponding to linear depths (if perspective mode):
-                if (perspectiveOperation)
-                {
-                    float farMinusNear= farClippingPlane-nearClippingPlane;
-                    float farDivFarMinusNear=farClippingPlane/farMinusNear;
-                    float nearTimesFar=nearClippingPlane*farClippingPlane;
-                    int v=resolutionX*resolutionY;
-                    for (int i=0;i<v;i++)
-                        depthBuffer[i]=((nearTimesFar/(farMinusNear*(farDivFarMinusNear-depthBuffer[i])))-nearClippingPlane)/farMinusNear;
-                }
-            }
-            oglOffscreen->unbindFramebuffer();
+            glPixelStorei(GL_PACK_ALIGNMENT,1);
+            glReadPixels(0,0,resolutionX,resolutionY,GL_RGB,GL_UNSIGNED_BYTE,rgbBuffer);
+            glPixelStorei(GL_PACK_ALIGNMENT,4);
         }
+        if (readDepth)
+        {
+            glReadPixels(0,0,resolutionX,resolutionY,GL_DEPTH_COMPONENT,GL_FLOAT,depthBuffer);
+            // Convert this depth info into values corresponding to linear depths (if perspective mode):
+            if (perspectiveOperation)
+            {
+                float farMinusNear= farClippingPlane-nearClippingPlane;
+                float farDivFarMinusNear=farClippingPlane/farMinusNear;
+                float nearTimesFar=nearClippingPlane*farClippingPlane;
+                int v=resolutionX*resolutionY;
+                for (int i=0;i<v;i++)
+                    depthBuffer[i]=((nearTimesFar/(farMinusNear*(farDivFarMinusNear-depthBuffer[i])))-nearClippingPlane)/farMinusNear;
+            }
+        }
+        currentOffscreen->unbindFramebuffer();
+        currentOffscreen->doneCurrentContext();
 
         meshContainer->decrementAllUsedCount();
         meshContainer->removeAllUnused();
@@ -551,6 +541,8 @@ void executeRenderCommands(bool,int message,void* data)
         textureContainer->removeAllUnused();
         lightContainer->decrementAllUsedCount();
         lightContainer->removeAllUnused();
+
+        currentOffscreen=NULL;
     }
 }
 
