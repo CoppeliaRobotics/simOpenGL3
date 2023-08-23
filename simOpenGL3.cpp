@@ -180,7 +180,7 @@ void executeRenderCommands(bool,int message,void* data)
         currentOffscreen=getOffscreen(visionSensorOrCameraId);
         if (currentOffscreen!=NULL)
         {
-            if (!currentOffscreen->isResolutionSame(resolutionX,resolutionY))
+            if ( (!currentOffscreen->isResolutionSame(resolutionX,resolutionY)) )
             {
                 removeOffscreen(visionSensorOrCameraId);
                 currentOffscreen=NULL;
@@ -192,6 +192,7 @@ void executeRenderCommands(bool,int message,void* data)
         if (currentOffscreen==NULL)
         {
             currentOffscreen=new COpenglOffscreen(visionSensorOrCameraId,resolutionX,resolutionY,valPtr[28],usingQGLWidget);
+            meshContainer->removeAll();
             oglOffscreens.push_back(currentOffscreen);
         }
 
@@ -215,7 +216,6 @@ void executeRenderCommands(bool,int message,void* data)
                 omniShader = new ShaderProgram(":/shadows/omni_depth.vert", ":/shadows/omni_depth.frag", "");
             }
 
-            currentOffscreen->makeContextCurrent();
             currentOffscreen->clearBuffers(viewAngle,orthoViewSize,nearClippingPlane,farClippingPlane,perspectiveOperation,backgroundColor);
 
             // The following instructions have the same effect as gluLookAt()
@@ -505,7 +505,6 @@ void executeRenderCommands(bool,int message,void* data)
         }
 
         glActiveTexture(GL_TEXTURE0);
-
         for (size_t i=0;i<meshesToRender.size();i++)
             meshesToRender[i]->render(currentOffscreen->shader);
 
@@ -532,15 +531,19 @@ void executeRenderCommands(bool,int message,void* data)
                     depthBuffer[i]=((nearTimesFar/(farMinusNear*(farDivFarMinusNear-depthBuffer[i])))-nearClippingPlane)/farMinusNear;
             }
         }
-        currentOffscreen->unbindFramebuffer();
-        currentOffscreen->doneCurrentContext();
 
+//        meshContainer->removeAll(); // when objects are dynamically added, might not render in all views... one could always remove them all, which goes 10% slower
+//        textureContainer->removeAll();
+        lightContainer->removeAll(); // need to remove all for correct shadow rendering
         meshContainer->decrementAllUsedCount();
         meshContainer->removeAllUnused();
         textureContainer->decrementAllUsedCount();
         textureContainer->removeAllUnused();
-        lightContainer->decrementAllUsedCount();
-        lightContainer->removeAllUnused();
+//        lightContainer->decrementAllUsedCount();
+//        lightContainer->removeAllUnused();
+
+        currentOffscreen->unbindFramebuffer();
+        currentOffscreen->doneCurrentContext();
 
         currentOffscreen=NULL;
     }

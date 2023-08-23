@@ -184,8 +184,8 @@ void Light::setPose(int lightType, C4X4Matrix m, ShaderProgram* camShader){
 
 Light::~Light()
 {
-    glDeleteFramebuffers(1, &depthMapFBO);
     glDeleteTextures(1, &depthMap);
+    glDeleteFramebuffers(1, &depthMapFBO);
 }
 
 void Light::renderDepthFromLight(ShaderProgram* depthShader, std::vector<Mesh*> meshesToRender)
