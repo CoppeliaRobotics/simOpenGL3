@@ -89,21 +89,6 @@ SIM_DLLEXPORT int simInit(SSimInit* info)
 
 SIM_DLLEXPORT void simInit_ui()
 {
-    if (usingQGLWidget)
-    {
-        QSurfaceFormat glFormat;
-        glFormat.setVersion(3,2);
-        glFormat.setProfile(QSurfaceFormat::CoreProfile);
-        glFormat.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
-        glFormat.setRenderableType(QSurfaceFormat::OpenGL);
-        glFormat.setRedBufferSize(8);
-        glFormat.setGreenBufferSize(8);
-        glFormat.setBlueBufferSize(8);
-        glFormat.setAlphaBufferSize(0);
-        glFormat.setStencilBufferSize(8);
-        glFormat.setDepthBufferSize(24);
-        QSurfaceFormat::setDefaultFormat(glFormat);
-    }
 }
 
 SIM_DLLEXPORT void simCleanup_ui()
