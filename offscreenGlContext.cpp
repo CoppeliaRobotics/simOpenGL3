@@ -3,19 +3,20 @@
 COffscreenGlContext::COffscreenGlContext(int resX,int resY,void* otherWidgetToShareResourcesWith,bool usingQGLWidget) : QObject()
 {
     _qOffscreenSurface=new QOffscreenSurface();
-    /*
-    QSurfaceFormat f;
-    f.setVersion(3,2);
-    f.setSwapBehavior(QSurfaceFormat::SingleBuffer);
-    f.setRenderableType(QSurfaceFormat::OpenGL);
-    f.setRedBufferSize(8);
-    f.setGreenBufferSize(8);
-    f.setBlueBufferSize(8);
-    f.setAlphaBufferSize(0);
-    f.setStencilBufferSize(8);
-    f.setDepthBufferSize(24);
-    _qOffscreenSurface->setFormat(f);
-    */
+    if (usingQGLWidget)
+    {
+        QSurfaceFormat f;
+        f.setVersion(3,2);
+        f.setSwapBehavior(QSurfaceFormat::SingleBuffer);
+        f.setRenderableType(QSurfaceFormat::OpenGL);
+        f.setRedBufferSize(8);
+        f.setGreenBufferSize(8);
+        f.setBlueBufferSize(8);
+        f.setAlphaBufferSize(0);
+        f.setStencilBufferSize(8);
+        f.setDepthBufferSize(24);
+        _qOffscreenSurface->setFormat(f);
+    }
     _qOffscreenSurface->create();
     _qContext=nullptr;
 
