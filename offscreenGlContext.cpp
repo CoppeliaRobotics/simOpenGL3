@@ -3,6 +3,7 @@
 COffscreenGlContext::COffscreenGlContext(int resX,int resY,void* otherWidgetToShareResourcesWith,bool usingQGLWidget) : QObject()
 {
     _qOffscreenSurface=new QOffscreenSurface();
+    /*
     QSurfaceFormat f;
     f.setVersion(3,2);
     f.setSwapBehavior(QSurfaceFormat::SingleBuffer);
@@ -14,6 +15,7 @@ COffscreenGlContext::COffscreenGlContext(int resX,int resY,void* otherWidgetToSh
     f.setStencilBufferSize(8);
     f.setDepthBufferSize(24);
     _qOffscreenSurface->setFormat(f);
+    */
     _qOffscreenSurface->create();
     _qContext=nullptr;
 
