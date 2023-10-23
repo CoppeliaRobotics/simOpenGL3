@@ -43,3 +43,4 @@ coppeliasim_add_plugin(
     ${COPPELIASIM_INCLUDE_DIR}/simMath/mathFuncs.cpp
 )
 target_link_libraries(simOpenGL3 PRIVATE Qt5::Widgets Qt5::OpenGL Qt5::PrintSupport OpenGL::GL)
+coppeliasim_add_lua(simOpenGL3.lua)
