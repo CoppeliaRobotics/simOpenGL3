@@ -24,16 +24,16 @@ coppeliasim_add_plugin(
     simOpenGL3
     LEGACY
     SOURCES
-    simOpenGL3.cpp
-    light.cpp
-    mesh.cpp
-    shaderProgram.cpp
-    texture.cpp
-    frameBufferObject.cpp
-    offscreenGlContext.cpp
-    openglOffscreen.cpp
-    openglBase.cpp
-    res.qrc
+    sourceCode/simOpenGL3.cpp
+    sourceCode/light.cpp
+    sourceCode/mesh.cpp
+    sourceCode/shaderProgram.cpp
+    sourceCode/texture.cpp
+    sourceCode/frameBufferObject.cpp
+    sourceCode/offscreenGlContext.cpp
+    sourceCode/openglOffscreen.cpp
+    sourceCode/openglBase.cpp
+    resources/res.qrc
     ${COPPELIASIM_INCLUDE_DIR}/simMath/3Vector.cpp
     ${COPPELIASIM_INCLUDE_DIR}/simMath/3X3Matrix.cpp
     ${COPPELIASIM_INCLUDE_DIR}/simMath/4Vector.cpp
@@ -43,4 +43,4 @@ coppeliasim_add_plugin(
     ${COPPELIASIM_INCLUDE_DIR}/simMath/mathFuncs.cpp
 )
 target_link_libraries(simOpenGL3 PRIVATE Qt5::Widgets Qt5::OpenGL Qt5::PrintSupport OpenGL::GL)
-coppeliasim_add_lua(simOpenGL3.lua)
+coppeliasim_add_lua(lua/simOpenGL3.lua)
