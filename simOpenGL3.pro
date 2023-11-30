@@ -52,15 +52,15 @@ INCLUDEPATH += "../include"
 
 SOURCES += \
     ../include/simLib/simLib.cpp \
-    light.cpp \
-    mesh.cpp \
-    shaderProgram.cpp \
-    texture.cpp \
-    simOpenGL3.cpp \
-    frameBufferObject.cpp \
-    offscreenGlContext.cpp \
-    openglOffscreen.cpp \
-    openglBase.cpp \
+    sourceCode/light.cpp \
+    sourceCode/mesh.cpp \
+    sourceCode/shaderProgram.cpp \
+    sourceCode/texture.cpp \
+    sourceCode/simOpenGL3.cpp \
+    sourceCode/frameBufferObject.cpp \
+    sourceCode/offscreenGlContext.cpp \
+    sourceCode/openglOffscreen.cpp \
+    sourceCode/openglBase.cpp \
     ../include/simMath/mathFuncs.cpp \
     ../include/simMath/3Vector.cpp \
     ../include/simMath/4Vector.cpp \
@@ -71,16 +71,16 @@ SOURCES += \
 
 HEADERS +=\
     ../include/simLib/simLib.h \
-    container.h \
-    light.h \
-    mesh.h \
-    shaderProgram.h \
-    texture.h \
-    simOpenGL3.h \
-    frameBufferObject.h \
-    offscreenGlContext.h \
-    openglOffscreen.h \
-    openglBase.h \
+    sourceCode/container.h \
+    sourceCode/light.h \
+    sourceCode/mesh.h \
+    sourceCode/shaderProgram.h \
+    sourceCode/texture.h \
+    sourceCode/simOpenGL3.h \
+    sourceCode/frameBufferObject.h \
+    sourceCode/offscreenGlContext.h \
+    sourceCode/openglOffscreen.h \
+    sourceCode/openglBase.h \
     ../include/simMath/mathFuncs.h \
     ../include/simMath/mathDefines.h \
     ../include/simMath/3Vector.h \
@@ -100,15 +100,15 @@ unix:!symbian {
 }
 
 DISTFILES += \
-    default.vert \
-    default.frag \
-    depth.frag \
-    depth.vert \
-    omni_depth.vert \
-    omni_depth.frag
+    resources/default.vert \
+    resources/default.frag \
+    resources/depth.frag \
+    resources/depth.vert \
+    resources/omni_depth.vert \
+    resources/omni_depth.frag
 
 RESOURCES += \
-    res.qrc
+    resources/res.qrc
 
 
 
