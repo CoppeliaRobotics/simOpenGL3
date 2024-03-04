@@ -6,7 +6,10 @@ set(CMAKE_MACOSX_RPATH 1)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt5 COMPONENTS Widgets OpenGL PrintSupport REQUIRED)
+set(Qt Qt5 CACHE STRING "Qt version to use (e.g. Qt5)")
+set_property(CACHE Qt PROPERTY STRINGS Qt5 Qt6)
+find_package(${Qt} COMPONENTS Widgets OpenGL PrintSupport REQUIRED)
+
 find_package(Boost REQUIRED)
 find_package(OpenGL REQUIRED)
 
@@ -42,5 +45,5 @@ coppeliasim_add_plugin(
     ${COPPELIASIM_INCLUDE_DIR}/simMath/7Vector.cpp
     ${COPPELIASIM_INCLUDE_DIR}/simMath/mathFuncs.cpp
 )
-target_link_libraries(simOpenGL3 PRIVATE Qt5::Widgets Qt5::OpenGL Qt5::PrintSupport OpenGL::GL)
+target_link_libraries(simOpenGL3 PRIVATE ${Qt}::Widgets ${Qt}::OpenGL ${Qt}::PrintSupport OpenGL::GL)
 coppeliasim_add_lua(lua/simOpenGL3.lua)
