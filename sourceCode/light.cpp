@@ -41,13 +41,13 @@ void Light::initForCamera(int handle, int lightType, C4X4Matrix m, int counter, 
     float aspect = 1.0f;
     lightProjection.setToIdentity();
 
-    if (lightType == sim_light_directional_subtype)
+    if (lightType == sim_light_directional)
     {
         lightName.append("dirLight");
         lightName.append(QString::number(counter));
         camShader->setUniformValue("dirLightLen", counter+1);
         lightProjection.ortho(-orthoWidth*0.5f, orthoWidth*0.5f, -orthoWidth*0.5f, orthoWidth*0.5f, near_plane, far_plane);
-    } else if (lightType == sim_light_omnidirectional_subtype) {
+    } else if (lightType == sim_light_omnidirectional) {
         lightName.append("pointLight");
         lightName.append(QString::number(counter));
         camShader->setUniformValue("pointLightLen", counter+1);
@@ -59,7 +59,7 @@ void Light::initForCamera(int handle, int lightType, C4X4Matrix m, int counter, 
         farplane.prepend(lightName);
         camShader->setUniformValue(farplane, farPlane);
 
-    } else if (lightType == sim_light_spot_subtype) {
+    } else if (lightType == sim_light_spot) {
         lightName.append("spotLight");
         lightName.append(QString::number(counter));
         camShader->setUniformValue("spotLightLen", counter+1);
@@ -107,7 +107,7 @@ void Light::prepareDepthMapFBO(int lightType, int shadowTextureSize){
 
     glGenFramebuffers(1, &depthMapFBO);
     glGenTextures(1, &depthMap);
-    if(lightType == sim_light_omnidirectional_subtype){
+    if(lightType == sim_light_omnidirectional){
         // We treat the depthMap as a cube map.
         glBindTexture(GL_TEXTURE_CUBE_MAP, depthMap);
         glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
@@ -161,7 +161,7 @@ void Light::setPose(int lightType, C4X4Matrix m, ShaderProgram* camShader){
 
     camShader->bind();
 
-    if (lightType == sim_light_omnidirectional_subtype) {
+    if (lightType == sim_light_omnidirectional) {
 
         for(int i=0; i < 6; i++)
             lightSpaceMats[i].setToIdentity();
@@ -198,7 +198,7 @@ void Light::renderDepthFromLight(ShaderProgram* depthShader, std::vector<Mesh*> 
     glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
     glClear(GL_DEPTH_BUFFER_BIT);
 
-    if (lightType == sim_light_omnidirectional_subtype) {
+    if (lightType == sim_light_omnidirectional) {
         glBindTexture(GL_TEXTURE_CUBE_MAP, depthMap);
         depthShader->setUniformValue("lightPos", lightPos);
         depthShader->setUniformValue("far_plane", farPlane);

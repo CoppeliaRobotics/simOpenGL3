@@ -244,11 +244,11 @@ void executeRenderCommands(bool,int message,void* data)
         // Default values gained by tuning on a selection of environements.
         float bias = 0.001f;
         float normalBias = 0.012f;
-        if (lightType == sim_light_directional_subtype)
+        if (lightType == sim_light_directional)
         {
             normalBias = 0.005f;
         }
-        else if (lightType == sim_light_spot_subtype)
+        else if (lightType == sim_light_spot)
         {
             bias = 0.0f;
             normalBias = 0.00008f;
@@ -299,17 +299,17 @@ void executeRenderCommands(bool,int message,void* data)
         C4X4Matrix m(lightTranformation.getMatrix());
 
         int counter = 0;
-        if (lightType == sim_light_directional_subtype)
+        if (lightType == sim_light_directional)
         {
             counter = activeDirLightCounter;
             activeDirLightCounter++;
         }
-        else if (lightType == sim_light_omnidirectional_subtype)
+        else if (lightType == sim_light_omnidirectional)
         {
             counter = activePointLightCounter;
             activePointLightCounter++;
         }
-        else if (lightType == sim_light_spot_subtype)
+        else if (lightType == sim_light_spot)
         {
             counter = activeSpotLightCounter;
             activeSpotLightCounter++;
@@ -439,7 +439,7 @@ void executeRenderCommands(bool,int message,void* data)
         for (int i=0;i<int(lightsToRender.size());i++)
         {
             ShaderProgram* depthSh = depthShader;
-            if (lightsToRender[i]->lightType == sim_light_omnidirectional_subtype)
+            if (lightsToRender[i]->lightType == sim_light_omnidirectional)
                 depthSh = omniShader;
 
             lightsToRender[i]->renderDepthFromLight(depthSh, meshesToRender);
@@ -459,7 +459,7 @@ void executeRenderCommands(bool,int message,void* data)
         for (int i=0;i<int(lightsToRender.size());i++)
         {
             glActiveTexture(GL_TEXTURE3 + i);
-            if (lightsToRender[i]->lightType == sim_light_omnidirectional_subtype)
+            if (lightsToRender[i]->lightType == sim_light_omnidirectional)
             {
                 glBindTexture(GL_TEXTURE_CUBE_MAP, lightsToRender[i]->depthMap);
                 QString depthCubeMaps = "depthCubeMap";
@@ -470,7 +470,7 @@ void executeRenderCommands(bool,int message,void* data)
             else
             {
                 glBindTexture(GL_TEXTURE_2D, lightsToRender[i]->depthMap);
-                if(lightsToRender[i]->lightType == sim_light_spot_subtype)
+                if(lightsToRender[i]->lightType == sim_light_spot)
                 {
                     QString lightName = "spotLight";
                     lightName.append(QString::number(spots_seen));
@@ -478,7 +478,7 @@ void executeRenderCommands(bool,int message,void* data)
                     currentOffscreen->shader->setUniformValue(lightName, 3+i);
                     spots_seen += 1;
                 }
-                else if (lightsToRender[i]->lightType == sim_light_directional_subtype)
+                else if (lightsToRender[i]->lightType == sim_light_directional)
                 {
                     QString lightName = "dirLight";
                     lightName.append(QString::number(dir_seen));
