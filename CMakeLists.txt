@@ -21,7 +21,7 @@ if(NOT COPPELIASIM_INCLUDE_DIR)
     endif()
 endif()
 list(APPEND CMAKE_MODULE_PATH ${COPPELIASIM_INCLUDE_DIR}/cmake)
-find_package(CoppeliaSim 4.5.1.7 REQUIRED)
+find_package(CoppeliaSim 4.5.1.7 REQUIRED COMPONENTS simLib-1 simMath-1)
 
 coppeliasim_add_plugin(
     simOpenGL3
@@ -37,13 +37,6 @@ coppeliasim_add_plugin(
     sourceCode/openglOffscreen.cpp
     sourceCode/openglBase.cpp
     resources/res.qrc
-    ${COPPELIASIM_INCLUDE_DIR}/simMath/3Vector.cpp
-    ${COPPELIASIM_INCLUDE_DIR}/simMath/3X3Matrix.cpp
-    ${COPPELIASIM_INCLUDE_DIR}/simMath/4Vector.cpp
-    ${COPPELIASIM_INCLUDE_DIR}/simMath/4X4Matrix.cpp
-    ${COPPELIASIM_INCLUDE_DIR}/simMath/mXnMatrix.cpp
-    ${COPPELIASIM_INCLUDE_DIR}/simMath/7Vector.cpp
-    ${COPPELIASIM_INCLUDE_DIR}/simMath/mathFuncs.cpp
 )
 target_link_libraries(simOpenGL3 PRIVATE ${Qt}::Widgets ${Qt}::OpenGL ${Qt}::PrintSupport OpenGL::GL)
 coppeliasim_add_lua(lua/simOpenGL3.lua)
