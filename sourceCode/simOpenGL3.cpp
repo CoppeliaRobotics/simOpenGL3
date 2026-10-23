@@ -150,7 +150,7 @@ void executeRenderCommands(bool,int message,void* data)
         nearClippingPlane=((float*)valPtr[9])[0];
         farClippingPlane=((float*)valPtr[10])[0];
         float* amb=(float*)valPtr[11];
-        C7Vector cameraTranformation(C4Vector((float*)valPtr[4]),C3Vector((float*)valPtr[3]));
+        CPose cameraTranformation(CQuaternion((float*)valPtr[4]),C3Vector((float*)valPtr[3]));
         C4X4Matrix m4(cameraTranformation.getMatrix());
         float orthoViewSize=((float*)valPtr[18])[0];
         visionSensorOrCameraId=((int*)valPtr[19])[0];
@@ -234,7 +234,7 @@ void executeRenderCommands(bool,int message,void* data)
         float constAttenuation=((float*)valPtr[4])[0];
         float linAttenuation=((float*)valPtr[5])[0];
         float quadAttenuation=((float*)valPtr[6])[0];
-        C7Vector lightTranformation(C4Vector((float*)valPtr[8]),C3Vector((float*)valPtr[7]));
+        CPose lightTranformation(CQuaternion((float*)valPtr[8]),C3Vector((float*)valPtr[7]));
         int lightHandle=((int*)valPtr[13])[0];
 
         float nearPlane=0.01f;
@@ -338,7 +338,7 @@ void executeRenderCommands(bool,int message,void* data)
         float* normals=((float*)valPtr[4]);
         int normalsCnt=((int*)valPtr[5])[0];
         float* colors=((float*)valPtr[8]);
-        C7Vector tr(C4Vector((float*)valPtr[7]),C3Vector((float*)valPtr[6]));
+        CPose tr(CQuaternion((float*)valPtr[7]),C3Vector((float*)valPtr[6]));
         bool textured=((bool*)valPtr[18])[0];
         float shadingAngle=((float*)valPtr[19])[0];
         bool translucid=((bool*)valPtr[21])[0];

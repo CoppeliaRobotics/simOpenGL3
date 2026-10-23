@@ -26,7 +26,7 @@ public:
 
     void renderDepth(ShaderProgram* depthShader);
     void render(ShaderProgram* m_shader);
-    void store(const C7Vector& tr, float* colors,bool textured,float shadingAngle,bool translucid,float opacityFactor,bool backfaceCulling,bool repeatU,bool repeatV,bool interpolateColors,int applyMode,Texture* texture,bool visibleEdges);
+    void store(const CPose& tr, float* colors,bool textured,float shadingAngle,bool translucid,float opacityFactor,bool backfaceCulling,bool repeatU,bool repeatV,bool interpolateColors,int applyMode,Texture* texture,bool visibleEdges);
 
     void decrementUsedCount();
     int getUsedCount();
@@ -40,7 +40,7 @@ protected:
 private:
     void setupMesh();
 
-    C7Vector tr;
+    CPose tr;
     float* colors;
     bool textured;
     float shadingAngle;

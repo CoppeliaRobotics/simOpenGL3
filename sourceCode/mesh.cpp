@@ -86,7 +86,7 @@ int Mesh::getId()
     return(_id);
 }
 
-void Mesh::store(const C7Vector& tr,float* colors,bool textured,float shadingAngle,bool translucid,float opacityFactor,bool backfaceCulling,bool repeatU,bool repeatV,bool interpolateColors,int applyMode,Texture* texture,bool visibleEdges)
+void Mesh::store(const CPose& tr,float* colors,bool textured,float shadingAngle,bool translucid,float opacityFactor,bool backfaceCulling,bool repeatU,bool repeatV,bool interpolateColors,int applyMode,Texture* texture,bool visibleEdges)
 {
     this->tr = tr;
     this->colors = colors;
@@ -106,7 +106,7 @@ void Mesh::store(const C7Vector& tr,float* colors,bool textured,float shadingAng
 void Mesh::renderDepth(ShaderProgram* depthShader)
 {
     // Set the model matrix
-    C4Vector axis=tr.Q.getAngleAndAxis();
+    CQuaternion axis=tr.Q.getAngleAndAxis();
     QMatrix4x4 mm;
     mm.setToIdentity();
     mm.translate(tr.X(0),tr.X(1),tr.X(2));
@@ -125,7 +125,7 @@ void Mesh::render(ShaderProgram* m_shader)
     float shininess = 48.0f;
 
     // Set the model matrix
-    C4Vector axis=tr.Q.getAngleAndAxis();
+    CQuaternion axis=tr.Q.getAngleAndAxis();
     QMatrix4x4 mm;
     mm.setToIdentity();
     mm.translate(tr.X(0),tr.X(1),tr.X(2));
