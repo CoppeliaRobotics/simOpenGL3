@@ -1,90 +1,875 @@
 #include "simOpenGL3.h"
-#include <simLib/simLib.h>
-#include <simMath/4X4Matrix.h>
-#include <simMath/mXnMatrix.h>
-#include <iostream>
-#include "openglOffscreen.h"
-#include <QCoreApplication>
-#include <algorithm>
-#include "shaderProgram.h"
-#include "light.h"
-#include "mesh.h"
-#include "texture.h"
-#include <chrono>
 
-#define MAX_LIGHTS 5
+#include <simLib-2/simLib.h>
+
+#include "offscreenContext.h"
+#include "offscreenTarget.h"
+#include "renderSettings.h"
+#include "sceneRenderer.h"
+#include "sceneTypes.h"
+
+#include "log.h"
+
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 LIBRARY simLib;
 
-// Shaders to be shared between all surfaces.
-ShaderProgram* depthShader = NULL;
-ShaderProgram* omniShader = NULL;
-
-// Meshes and Textures to be shared between all surfaces.
-COcContainer<Mesh>* meshContainer = new COcContainer<Mesh>();
-COcContainer<Texture>* textureContainer = new COcContainer<Texture>();
-COcContainer<Light>* lightContainer = new COcContainer<Light>();
-
-int resolutionX;
-int resolutionY;
-float nearClippingPlane;
-float farClippingPlane;
-bool perspectiveOperation;
-int visionSensorOrCameraId;
-bool usingQGLWidget;
-bool instanceSwitched=false;
-
-int activeDirLightCounter, activePointLightCounter, activeSpotLightCounter;
-
-std::vector<COpenglOffscreen*> oglOffscreens;
-COpenglOffscreen* currentOffscreen = NULL;
-
-std::vector<Light*> lightsToRender;
-std::vector<Mesh*> meshesToRender;
-
-COpenglOffscreen* getOffscreen(int objectHandle)
+namespace
 {
-    for (size_t i=0;i<oglOffscreens.size();i++)
-    {
-        if (oglOffscreens[i]->getAssociatedObjectHandle()==objectHandle)
-            return(oglOffscreens[i]);
-    }
-    return(NULL);
+
+using namespace modern;
+
+const char* kLogPrefix = "simOpenGL3";
+
+// Per-light projection tuning, read once per light handle from
+// simGetExtensionString() exactly like the legacy renderer did, so scenes that
+// were tuned for it keep their settings.
+struct LightTuning
+{
+    float nearPlane = 0.01f;
+    float farPlane = 10.0f;
+    float orthoSize = 8.0f;
+    float bias = 0.001f;
+    float normalBias = 0.012f;
+    int textureSize = 1024;
+    bool skipShadows = false;
+};
+
+struct RendererState
+{
+    RenderSettings settings;
+
+    OffscreenContext context;
+    std::unique_ptr<SceneRenderer> renderer;
+    std::unordered_map<int, std::unique_ptr<OffscreenTarget>> targets;
+    std::unordered_map<int, LightTuning> lightTunings;
+
+    FrameData frame;
+
+    int activeHandle = -1;
+    OffscreenTarget* activeTarget = nullptr;
+    bool glUnavailable = false;
+    bool versionReported = false;
+    bool instanceSwitchPending = false;
+
+
+    long long frameIndex = 0;
+
+    std::vector<int> unknownMessages;
+    bool markerReported = false;
+    bool markerRejectedReported = false;
+};
+
+RendererState& state()
+{
+    static RendererState instance;
+    return instance;
 }
 
-void removeOffscreen(int objectHandle)
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+void logMessage(int verbosity, const std::string& message)
 {
-    for (size_t i=0;i<oglOffscreens.size();i++)
+    simAddLog(kLogPrefix, verbosity, message.c_str());
+}
+
+// Everything the renderer core logs (shader errors, incomplete framebuffers,
+// missing GL entry points, ...) goes through this sink, so it lands in
+// CoppeliaSim's console instead of the process' stderr, which is invisible for
+// a GUI application.  Without it a failure on a remote machine is silent.
+void logSink(LogLevel level, const char* message)
+{
+    const int verbosity = (level == LogLevel::Error) ? sim_verbosity_errors : sim_verbosity_warnings;
+    simAddLog(kLogPrefix, verbosity, message);
+}
+
+
+// sim_message_eventcallback_extrenderer_marker.  Spelled out instead of taken
+// from simConst.h because it was added to the engine before the public headers
+// shipped with it, so a 4.10 header set does not declare it.
+constexpr int kMessageExtRendererMarker = 346;
+
+float readFloat(const void* pointer, float fallback)
+{
+    return pointer != nullptr ? *static_cast<const float*>(pointer) : fallback;
+}
+
+int readInt(const void* pointer, int fallback)
+{
+    return pointer != nullptr ? *static_cast<const int*>(pointer) : fallback;
+}
+
+bool readBool(const void* pointer, bool fallback)
+{
+    return pointer != nullptr ? *static_cast<const bool*>(pointer) : fallback;
+}
+
+Vec3 readVector3(const void* pointer, const Vec3& fallback)
+{
+    if (pointer == nullptr)
+        return fallback;
+    const float* values = static_cast<const float*>(pointer);
+    return Vec3(values[0], values[1], values[2]);
+}
+
+// Surface colours (shape diffuse/specular, textures) are authored in sRGB, so
+// they are decoded to linear before lighting.
+//
+// Light colours and the scene ambient are deliberately *not* decoded: they are
+// intensity multipliers rather than display colours, and CoppeliaSim's own
+// renderer used them verbatim.  Decoding them as well darkens the image twice
+// (a 0.5 light becomes 0.22), which is exactly what "much darker than the old
+// renderer" looks like.
+Vec3 toLinear(const Vec3& color)
+{
+    return state().settings.gammaCorrect ? linearFromSrgb(color) : color;
+}
+
+// CoppeliaSim's view convention: the camera pose has to be inverted and then
+// flipped 180 degrees around Y before it can be used as an OpenGL view matrix.
+Mat4 viewFromPose(const float quaternion[4], const float position[3])
+{
+    const Mat4 pose = poseToMatrix(quaternion, position);
+    Mat4 flip;
+    flip.rotate(180.0f, 0.0f, 1.0f, 0.0f);
+    return flip * pose.inverted();
+}
+
+// ---------------------------------------------------------------------------
+// Renderer / target lifetime
+// ---------------------------------------------------------------------------
+
+bool ensureRenderer()
+{
+    RendererState& s = state();
+    if (s.glUnavailable)
+        return false;
+    if (s.renderer != nullptr && s.renderer->isReady())
+        return true;
+
+    if (!s.context.ensureCreated())
     {
-        if (oglOffscreens[i]->getAssociatedObjectHandle()==objectHandle)
+        s.glUnavailable = true;
+        logMessage(sim_verbosity_errors,
+                   "cannot create the off-screen OpenGL context; the renderer is disabled");
+        return false;
+    }
+
+    if (!s.context.supportsRequiredVersion())
+    {
+        // Deliberately not fatal: the context string is the only authority, and
+        // shader compilation reports a genuinely old context far more precisely
+        // than a version comparison can.
+        logMessage(sim_verbosity_warnings,
+                   "the context reports \"" + s.context.versionString() +
+                       "\" but 3.3 core is required; continuing, shader compilation will fail "
+                       "if the context is really too old");
+    }
+
+    s.renderer = std::make_unique<SceneRenderer>();
+    if (!s.renderer->initialize(*s.context.functions(), s.settings))
+    {
+        s.renderer.reset();
+        s.glUnavailable = true;
+        logMessage(sim_verbosity_errors,
+                   "shader compilation failed; see the console for details");
+        return false;
+    }
+
+    if (!s.versionReported)
+    {
+        s.versionReported = true;
+
+    }
+    return true;
+}
+
+OffscreenTarget* acquireTarget(int handle, int width, int height)
+{
+    RendererState& s = state();
+    GLFuncs* gl = s.context.functions();
+    if (gl == nullptr)
+        return nullptr;
+
+    const auto it = s.targets.find(handle);
+    if (it != s.targets.end() && it->second->isValid() && it->second->matches(width, height))
+        return it->second.get();
+
+    auto target = std::make_unique<OffscreenTarget>();
+    if (!target->create(*gl, width, height, s.settings))
+    {
+        char message[128];
+        std::snprintf(message, sizeof(message), "cannot create a %dx%d render target", width,
+                      height);
+        logMessage(sim_verbosity_errors, message);
+        return nullptr;
+    }
+
+    if (it != s.targets.end())
+        it->second->destroy(*gl);
+
+    OffscreenTarget* raw = target.get();
+    s.targets[handle] = std::move(target);
+    return raw;
+}
+
+void releaseGlResources()
+{
+    RendererState& s = state();
+    if (!s.context.isCreated())
+        return;
+
+    if (!s.context.makeCurrent())
+        return;
+
+    GLFuncs* gl = s.context.functions();
+    if (gl != nullptr)
+    {
+        for (auto& entry : s.targets)
+            entry.second->destroy(*gl);
+        if (s.renderer)
+            s.renderer->releaseCachedResources(*gl);
+    }
+    s.targets.clear();
+    s.lightTunings.clear();
+    s.context.doneCurrent();
+}
+
+void shutdownRenderer()
+{
+    RendererState& s = state();
+    if (s.context.isCreated() && s.context.makeCurrent())
+    {
+        GLFuncs* gl = s.context.functions();
+        if (gl != nullptr)
         {
-            delete lightContainer;
-            lightContainer = new COcContainer<Light>();
-            delete oglOffscreens[i];
-            oglOffscreens.erase(oglOffscreens.begin()+i);
-            break;
+            for (auto& entry : s.targets)
+                entry.second->destroy(*gl);
+            if (s.renderer)
+            {
+                s.renderer->releaseCachedResources(*gl);
+                s.renderer->shutdown(*gl);
+            }
+        }
+        s.targets.clear();
+        s.context.doneCurrent();
+    }
+    s.renderer.reset();
+    s.context.destroy();
+}
+
+// ---------------------------------------------------------------------------
+// Light tuning
+// ---------------------------------------------------------------------------
+
+std::string readExtensionString(int handle, const char* key, bool* found)
+{
+    *found = false;
+    char* text = simGetExtensionString(handle, -1, key);
+    if (text == nullptr)
+        return std::string();
+
+    *found = true;
+    const std::string result(text);
+    simReleaseBuffer(text);
+    return result;
+}
+
+const LightTuning& tuningFor(int handle, int lightType)
+{
+    RendererState& s = state();
+    const auto it = s.lightTunings.find(handle);
+    if (it != s.lightTunings.end())
+        return it->second;
+
+    LightTuning tuning;
+
+    // Defaults derived the same way the legacy renderer derived them, so a
+    // scene that was authored against it keeps its shadow quality.
+    if (lightType == simLightDirectional)
+        tuning.normalBias = 0.005f;
+    else if (lightType == simLightSpot)
+    {
+        tuning.bias = 0.0f;
+        tuning.normalBias = 0.00008f;
+    }
+    tuning.textureSize = s.settings.shadowMapSize;
+
+    bool found = false;
+    std::string value = readExtensionString(handle, "nearPlane@lightProjection@openGL3", &found);
+    if (found)
+        tuning.nearPlane = std::strtof(value.c_str(), nullptr);
+    value = readExtensionString(handle, "farPlane@lightProjection@openGL3", &found);
+    if (found)
+        tuning.farPlane = std::strtof(value.c_str(), nullptr);
+    value = readExtensionString(handle, "orthoSize@lightProjection@openGL3", &found);
+    if (found)
+        tuning.orthoSize = std::strtof(value.c_str(), nullptr);
+    value = readExtensionString(handle, "shadowTextureSize@lightProjection@openGL3", &found);
+    if (found)
+        tuning.textureSize = std::atoi(value.c_str());
+    value = readExtensionString(handle, "bias@lightProjection@openGL3", &found);
+    if (found)
+        tuning.bias = std::strtof(value.c_str(), nullptr);
+    value = readExtensionString(handle, "normalBias@lightProjection@openGL3", &found);
+    if (found)
+        tuning.normalBias = std::strtof(value.c_str(), nullptr);
+    value = readExtensionString(handle, "noShadow@lightProjection@openGL3", &found);
+    if (found)
+        tuning.skipShadows = std::atoi(value.c_str()) != 0;
+
+    tuning.nearPlane = std::max(tuning.nearPlane, 1e-4f);
+    tuning.farPlane = std::max(tuning.farPlane, tuning.nearPlane + 1e-3f);
+    tuning.orthoSize = std::max(tuning.orthoSize, 1e-3f);
+    tuning.textureSize = clampValue(tuning.textureSize, 128, 4096);
+
+    return s.lightTunings.emplace(handle, tuning).first->second;
+}
+
+// ---------------------------------------------------------------------------
+// Message handlers
+// ---------------------------------------------------------------------------
+
+void handleStart(void** data)
+{
+    RendererState& s = state();
+    if (!ensureRenderer())
+        return;
+
+    const int width = readInt(data[0], 1);
+    const int height = readInt(data[1], 1);
+    if (width <= 0 || height <= 0)
+        return;
+
+    if (!s.context.makeCurrent())
+        return;
+
+    OffscreenTarget* target = acquireTarget(readInt(data[19], -1), width, height);
+    if (target == nullptr)
+    {
+        s.context.doneCurrent();
+        return;
+    }
+
+    s.frame = FrameData{};
+    s.activeHandle = readInt(data[19], -1);
+    s.activeTarget = target;
+
+
+    CameraData& camera = s.frame.camera;
+    camera.width = width;
+    camera.height = height;
+    camera.perspective = (readInt(data[5], 0) & 1) == 0;
+    // data[29]: the engine wants a colour coded frame (handles as colours).
+    camera.colorCoded = readInt(data[29], 0) != 0;
+    camera.viewAngle = readFloat(data[8], 1.0f);
+    camera.nearPlane = readFloat(data[9], 0.01f);
+    camera.farPlane = readFloat(data[10], 10.0f);
+    camera.orthoViewSize = readFloat(data[18], 1.0f);
+
+    // The projection is built from exactly what the callback reports: the
+    // per-axis angles (data[6]/data[7], full angles in perspective mode and
+    // aperture sizes in orthographic mode) and the clipping planes
+    // (data[9]/data[10]).  Recomputing the angles from the single view angle
+    // would quietly disagree with the engine whenever the ratio convention
+    // differs.
+    const float xAngle = readFloat(data[6], camera.viewAngle);
+    const float yAngle = readFloat(data[7], camera.viewAngle);
+    const float* position = static_cast<const float*>(data[3]);
+    const float* quaternion = static_cast<const float*>(data[4]);
+    if (position == nullptr || quaternion == nullptr)
+    {
+        s.context.doneCurrent();
+        s.activeTarget = nullptr;
+        return;
+    }
+
+    camera.eye = Vec3(position[0], position[1], position[2]);
+    camera.view = viewFromPose(quaternion, position);
+
+
+    camera.projection.setToIdentity();
+    if (camera.perspective)
+    {
+        // Same construction as the engine's glFrustum() call.
+        const float tangentX = std::tan(std::max(xAngle, 1e-4f) * 0.5f);
+        const float tangentY = std::tan(std::max(yAngle, 1e-4f) * 0.5f);
+        camera.projection.frustum(-camera.nearPlane * tangentX, camera.nearPlane * tangentX,
+                                  -camera.nearPlane * tangentY, camera.nearPlane * tangentY,
+                                  camera.nearPlane, camera.farPlane);
+    }
+    else
+    {
+        const float halfX = std::max(xAngle, 1e-4f) * 0.5f;
+        const float halfY = std::max(yAngle, 1e-4f) * 0.5f;
+        camera.projection.ortho(-halfX, halfX, -halfY, halfY, camera.nearPlane, camera.farPlane);
+    }
+    camera.viewProjection = camera.projection * camera.view;
+
+
+    // The background is a display colour and is decoded; the ambient is an
+    // intensity multiplier and is not (see toLinear()).
+    camera.backgroundColor = toLinear(readVector3(data[2], Vec3(0.3f, 0.3f, 0.35f)));
+    camera.fogColor = camera.backgroundColor;
+    camera.ambient = readVector3(data[11], Vec3(0.2f, 0.2f, 0.2f));
+
+    // Fog: data[13] is the type and data[17] the enabled flag for both camera
+    // and vision sensor.  data[14..16] are floats for a camera but doubles for
+    // a vision sensor (an inconsistency on the engine side), so the values are
+    // validated before they are used: a mismatch simply disables fog instead
+    // of fogging the whole image.
+    camera.fogEnabled = false;
+    if (readBool(data[17], false) && data[14] != nullptr && data[15] != nullptr &&
+        data[16] != nullptr)
+    {
+        const float fogStart = readFloat(data[14], 0.0f);
+        const float fogEnd = readFloat(data[15], 0.0f);
+        const float fogDensity = readFloat(data[16], 0.0f);
+        const int fogType = readInt(data[13], 0);
+
+        const bool finite = std::isfinite(fogStart) && std::isfinite(fogEnd) &&
+                            std::isfinite(fogDensity);
+        const bool usable = finite && ((fogType == simFogLinear) ? (fogEnd > fogStart)
+                                                                 : (fogDensity > 0.0f));
+        if (usable)
+        {
+            camera.fogEnabled = true;
+            camera.fogType = fogType;
+            camera.fogStart = fogStart;
+            camera.fogEnd = fogEnd;
+            camera.fogDensity = fogDensity;
+            // The fog colour is blended into the finished (linear) image, so it
+            // is decoded like any other display colour.
+            camera.fogColor = toLinear(readVector3(data[12], camera.backgroundColor));
         }
     }
 }
 
+void handleLight(void** data)
+{
+    RendererState& s = state();
+    if (s.activeTarget == nullptr)
+        return;
+    if (int(s.frame.lights.size()) >= kMaxLights)
+        return;
+
+    const int type = readInt(data[0], simLightOmnidirectional);
+    const int handle = readInt(data[13], 0);
+    const float* position = static_cast<const float*>(data[7]);
+    const float* quaternion = static_cast<const float*>(data[8]);
+    const float* colors = static_cast<const float*>(data[3]);
+    if (position == nullptr || quaternion == nullptr || colors == nullptr)
+        return;
+
+    const LightTuning& tuning = tuningFor(handle, type);
+    if (tuning.skipShadows)
+        return;
+
+    LightShadowInfo light;
+    light.handle = handle;
+    light.type = type;
+    light.pose = poseToMatrix(quaternion, position);
+    light.position = Vec3(position[0], position[1], position[2]);
+    light.direction = Vec3(light.pose(0, 2), light.pose(1, 2), light.pose(2, 2));
+
+    // A light is handed two colour triples: diffuse followed by specular.
+    // Where they start depends on the build: the 15 float colour array keeps
+    // the object layout, so the light diffuse sits at 3..5 and specular at
+    // 6..8, while builds that pass the six light floats directly start at 0.
+    // The first triple is zero in the object layout, so the two are told apart
+    // by which one is actually populated.
+    Vec3 diffuseColors(colors[0], colors[1], colors[2]);
+    Vec3 specularColors(colors[3], colors[4], colors[5]);
+    if (diffuseColors.x() <= 0.0f && diffuseColors.y() <= 0.0f && diffuseColors.z() <= 0.0f)
+    {
+        diffuseColors = Vec3(colors[3], colors[4], colors[5]);
+        specularColors = Vec3(colors[6], colors[7], colors[8]);
+    }
+
+    // Intensity multipliers, used as authored (see toLinear()).
+    light.diffuse = diffuseColors;
+    light.specular = specularColors;
+
+    light.constantAttenuation = readFloat(data[4], 1.0f);
+    light.linearAttenuation = readFloat(data[5], 0.0f);
+    light.quadraticAttenuation = readFloat(data[6], 0.0f);
+    light.cutoffAngle = clampValue(readFloat(data[1], 0.5f), 0.01f, 1.55f);
+
+    light.nearPlane = tuning.nearPlane;
+    light.farPlane = tuning.farPlane;
+    light.orthoSize = tuning.orthoSize;
+    light.bias = tuning.bias;
+    light.normalBias = tuning.normalBias;
+    light.textureSize = tuning.textureSize;
+
+    s.frame.lights.push_back(light);
+}
+
+// Slot contract of sim_message_eventcallback_extrenderer_mesh.
+//
+// CMesh::display_extRenderer() fills the array in two different shapes:
+//
+//   always          : 0..8 (geometry), 18 (textured), 19..27, 29..33
+//   textured only   : 9..17 (uvs, texture, wrap, interpolate, applyMode)
+//
+// The array is a plain `void* data[40]` on the engine's stack, so reading a
+// slot that the current branch did not fill reads uninitialised memory.  That
+// is not theoretical: reading data[17] on an untextured mesh crashed on macOS
+// (the stale slot held 0x3) while happening to work on Windows.
+void handleMesh(void** data)
+{
+    RendererState& s = state();
+    if (s.activeTarget == nullptr || s.renderer == nullptr)
+        return;
+
+    GLFuncs* gl = s.context.functions();
+    if (gl == nullptr)
+        return;
+
+    const float* vertices = static_cast<const float*>(data[0]);
+    const int vertexCount = readInt(data[1], 0);
+    const int* indices = static_cast<const int*>(data[2]);
+    const int triangleCount = readInt(data[3], 0);
+    const float* normals = static_cast<const float*>(data[4]);
+    const int normalCount = readInt(data[5], 0);
+    const float* position = static_cast<const float*>(data[6]);
+    const float* quaternion = static_cast<const float*>(data[7]);
+    const float* colors = static_cast<const float*>(data[8]);
+
+    if (vertices == nullptr || indices == nullptr || position == nullptr ||
+        quaternion == nullptr || colors == nullptr || vertexCount <= 0 || triangleCount <= 0)
+        return;
+
+    const bool textured = readBool(data[18], false);
+    const bool translucid = readBool(data[21], false);
+    const bool cullBackFaces = readBool(data[23], true);
+    const float opacity = readFloat(data[22], 1.0f);
+
+    const int meshId = readInt(data[24], 0); // regenerated on every call, see below
+    const int textureId = readInt(data[25], 0);
+    const int shapeHandle = readInt(data[32], -1);
+    const int componentIndex = readInt(data[33], 0);
+
+    // CMesh::display_extRenderer() bumps the mesh id on *every* callback in
+    // 4.11 (`if (true) // mesh scaling was not reflected`), so using it as a
+    // cache key made every frame upload every mesh again and the cache grew
+    // without bound.  The shape handle and component index are stable for the
+    // lifetime of the component; the vertex data is hashed separately, so an
+    // edited or animated shape is still re-uploaded.
+    const std::uint64_t meshKey =
+        shapeHandle < 0 ? std::uint64_t(std::uint32_t(meshId))
+                        : (std::uint64_t(std::uint32_t(shapeHandle)) << 32) |
+                              std::uint64_t(std::uint32_t(componentIndex));
+    // data[9..17] are only valid on the textured branch of the engine's
+    // callback; everything below that reads them is guarded by `textured`.
+    const int applyMode = textured ? readInt(data[17], simTextureModulate) : simTextureModulate;
+    const float* texCoords = textured ? static_cast<const float*>(data[9]) : nullptr;
+    const int texCoordCount = textured ? readInt(data[10], 0) : 0;
+
+    if (textured && !s.renderer->hasTexture(textureId))
+    {
+        const unsigned char* pixels = static_cast<const unsigned char*>(data[11]);
+        const int textureWidth = readInt(data[12], 0);
+        const int textureHeight = readInt(data[13], 0);
+        if (pixels != nullptr && textureWidth > 0 && textureHeight > 0)
+        {
+            s.renderer->uploadTexture(*gl, textureId, pixels, textureWidth, textureHeight,
+                                      readBool(data[14], false), readBool(data[15], false),
+                                      readBool(data[16], true));
+        }
+    }
+
+    s.renderer->uploadGeometry(*gl, meshKey, vertices, vertexCount, normals, normalCount,
+                               texCoords, texCoordCount, indices, triangleCount * 3);
+
+    DrawItem item;
+    item.meshKey = meshKey;
+    item.textureId = textured ? textureId : 0;
+    item.textured = textured;
+    item.applyMode = textured ? applyMode : simTextureModulate;
+    item.translucid = translucid;
+    item.opacity = clampValue(opacity, 0.0f, 1.0f);
+    item.cullBackFaces = cullBackFaces;
+    item.handle = shapeHandle;
+    item.model = poseToMatrix(quaternion, position);
+    item.normalMatrix = item.model.normalMatrix();
+
+    // The diffuse colour is a surface colour and is decoded from sRGB like a
+    // texture.  The specular colour is not: it is a highlight coefficient that
+    // CoppeliaSim authors in the small range a fixed-function pipeline expects
+    // (0.1..0.3), and the decode would shrink it by five times or more, which
+    // is exactly what makes a highlight disappear.  The reference renderer used
+    // it verbatim, and the shininess is the same constant it used.
+    item.material.diffuse = toLinear(Vec3(colors[0], colors[1], colors[2]));
+    item.material.specular = Vec3(colors[6], colors[7], colors[8]);
+    item.material.shininess = 48.0f;
+
+    const Vec4 viewPosition = s.frame.camera.view * Vec4(item.model.column(3).toVector3D(),
+                                                                  1.0f);
+    item.viewDepth = -viewPosition.z();
+
+
+    s.frame.items.push_back(item);
+}
+
+// sim_message_eventcallback_extrenderer_marker
+//
+// The engine sends pointers into the marker object that are only valid for the
+// duration of the callback, so everything is copied into the frame here.
+void handleMarker(void** data)
+{
+    RendererState& s = state();
+    if (s.activeTarget == nullptr)
+    {
+        if (!s.markerRejectedReported)
+        {
+            s.markerRejectedReported = true;
+            logMessage(sim_verbosity_warnings,
+                       "marker callback received outside of a render frame, ignored");
+        }
+        return;
+    }
+
+
+    const int type = readInt(data[0], markerTypePoints);
+    const int options = readInt(data[1], 0);
+
+    MarkerItem marker;
+    marker.type = type;
+    marker.options = options;
+    marker.handle = readInt(data[15], 0);
+
+    // data[3..6] and [8..12] are pointers to pointers: the engine stores the
+    // array pointers in local variables and passes their address.
+    const int pointDataCount = readInt(data[2], 0);
+    const float* points = data[3] != nullptr ? *static_cast<const float* const*>(data[3]) : nullptr;
+    if (points == nullptr || pointDataCount <= 0)
+    {
+        if (!s.markerRejectedReported)
+        {
+            s.markerRejectedReported = true;
+            logMessage(sim_verbosity_warnings,
+                       "marker callback without usable data (points=" +
+                           std::to_string(points != nullptr ? 1 : 0) + ", count=" +
+                           std::to_string(pointDataCount) + ")");
+        }
+        return;
+    }
+
+    const int pointCount = pointDataCount / 3;
+    marker.points.assign(points, points + std::size_t(pointCount) * 3);
+
+    // How the optional arrays are sized depends on the type, and guessing wrong
+    // means reading past the end of the engine's vector:
+    //   colours  always 4 per point (2*4 per line/tube, 3*4 per triangle),
+    //            except for axes, which carry none
+    //   quats    4 per item, only for the one-point primitives and custom
+    //   sizes    3 per item for those same types, but tubes only carry a single
+    //            size triple (the radius), which is what the engine itself
+    //            reads (_sizes[0] in CMarker::_drawTubeLines)
+    const int pointsPerItem =
+        (type == markerTypeLines || type == markerTypeTubes)
+            ? 2
+            : (type == markerTypeTriangles ? 3 : 1);
+    const int itemCount = pointsPerItem > 0 ? pointCount / pointsPerItem : 0;
+    const bool usesItemPose =
+        (type == markerTypeSpheres || type == markerTypeSquares || type == markerTypeDiscs ||
+         type == markerTypeCubes || type == markerTypeCylinders || type == markerTypeAxes ||
+         type == markerTypeCustom);
+    const bool usesColors = (type != markerTypeAxes);
+
+    if (usesColors && data[5] != nullptr)
+    {
+        const unsigned char* colors = *static_cast<const unsigned char* const*>(data[5]);
+        if (colors != nullptr)
+            marker.colors.assign(colors, colors + std::size_t(pointCount) * 4);
+    }
+    if (usesItemPose && data[4] != nullptr)
+    {
+        const float* quats = *static_cast<const float* const*>(data[4]);
+        if (quats != nullptr && itemCount > 0)
+            marker.quats.assign(quats, quats + std::size_t(itemCount) * 4);
+    }
+    if (data[6] != nullptr)
+    {
+        const float* sizes = *static_cast<const float* const*>(data[6]);
+        if (sizes != nullptr)
+        {
+            if (type == markerTypeTubes)
+                marker.sizes.assign(sizes, sizes + 3); // one radius, engine reads sizes[0]
+            else if (usesItemPose && itemCount > 0)
+                marker.sizes.assign(sizes, sizes + std::size_t(itemCount) * 3);
+        }
+    }
+
+    if (type == markerTypeCustom)
+    {
+        const int vertexCount = readInt(data[9], 0); // vertex count or float count
+        const int indexCount = readInt(data[11], 0);
+        if (data[10] != nullptr && indexCount > 0)
+        {
+            const int* indices = *static_cast<const int* const*>(data[10]);
+            if (indices != nullptr)
+                marker.indices.assign(indices, indices + indexCount);
+        }
+        if (data[8] != nullptr && !marker.indices.empty())
+        {
+            // Cut the vertex copy at the highest index actually referenced: that
+            // is always inside the array, whether the engine reports the number
+            // of vertices or the number of floats, and it is all the renderer
+            // needs.
+            int highestIndex = 0;
+            for (int index : marker.indices)
+            {
+                if (index > highestIndex)
+                    highestIndex = index;
+            }
+            const float* vertices = *static_cast<const float* const*>(data[8]);
+            if (vertices != nullptr && highestIndex >= 0 && highestIndex < 10000000)
+            {
+                marker.vertices.assign(vertices,
+                                       vertices + (std::size_t(highestIndex) + 1) * 3);
+            }
+        }
+        else if (data[8] != nullptr && vertexCount > 0)
+        {
+            const float* vertices = *static_cast<const float* const*>(data[8]);
+            if (vertices != nullptr)
+                marker.vertices.assign(vertices, vertices + std::size_t(vertexCount));
+        }
+        if (data[12] != nullptr)
+        {
+            const float* normals = *static_cast<const float* const*>(data[12]);
+            if (normals != nullptr)
+                marker.normals.assign(normals, normals + std::size_t(indexCount) * 3);
+        }
+    }
+
+    // The marker frame is always applied: the points are relative to it, and so
+    // are the per-item quaternions.  The position and quaternion arrive in
+    // double precision with the quaternion in (qx, qy, qz, w) order, while
+    // poseToMatrix() takes the engine's internal (w, x, y, z) order.
+    marker.transform.setToIdentity();
+    if (data[13] != nullptr && data[14] != nullptr)
+    {
+        const double* position = static_cast<const double*>(data[13]);
+        const double* quaternion = static_cast<const double*>(data[14]);
+        const float positionF[3] = {float(position[0]), float(position[1]), float(position[2])};
+        const float quaternionF[4] = {float(quaternion[3]), float(quaternion[0]),
+                                      float(quaternion[1]), float(quaternion[2])};
+        marker.transform = poseToMatrix(quaternionF, positionF);
+    }
+
+    s.frame.markers.push_back(std::move(marker));
+}
+void handleStop(void** data)
+{
+    RendererState& s = state();
+    if (s.activeTarget == nullptr)
+        return;
+
+    unsigned char* rgbBuffer = static_cast<unsigned char*>(data[0]);
+    float* depthBuffer = static_cast<float*>(data[1]);
+    const bool readRgb = readBool(data[2], true);
+    const bool readDepth = readBool(data[3], false);
+
+    if (s.renderer != nullptr && s.renderer->isReady())
+    {
+        s.renderer->renderFrame(*s.context.functions(), *s.activeTarget, s.frame, rgbBuffer,
+                                depthBuffer, readRgb, readDepth);
+
+
+    }
+
+    s.context.doneCurrent();
+
+
+    s.activeTarget = nullptr;
+    s.activeHandle = -1;
+    s.frame.items.clear();
+    s.frame.lights.clear();
+    ++s.frameIndex;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Plugin entry points
+// ---------------------------------------------------------------------------
+
+// Where CoppeliaSim keeps its resources.  Plugins have no search path of their
+// own, so the configuration file lives next to the resources instead of next to
+// the library: <paths.resources>/simOpenGL3.ini.
+//
+// The plugin ABI declares this as
+//     int simGetStringProperty(int64_t target, const char* pName, char** pState)
+// (see simLib-2/simLib.h), and simLib-2 binds it to the library's
+// simGetStringProperty2 export.  The buffer it allocates is owned by the
+// caller and has to be released with simReleaseBuffer.
+std::string resourcesDirectory()
+{
+    if (simGetStringProperty == nullptr)
+    {
+        logMessage(sim_verbosity_warnings,
+                   "simGetStringProperty is not available in this build, using the built-in "
+                   "defaults");
+        return std::string();
+    }
+
+    char* location = nullptr;
+    const int result = simGetStringProperty(sim_handle_app, "paths.resources", &location);
+    if (result != sim_propertyret_ok || location == nullptr)
+    {
+        logMessage(sim_verbosity_warnings,
+                   "cannot query the resources directory, using the built-in defaults");
+        return std::string();
+    }
+
+    const std::string directory(location);
+    simReleaseBuffer(location);
+    return directory;
+}
 SIM_DLLEXPORT int simInit(SSimInit* info)
 {
-    simLib=loadSimLibrary(info->coppeliaSimLibPath);
-    if (simLib==NULL)
+    // Nothing may be logged through simAddLog yet: the plugin name is only
+    // registered by CoppeliaSim after simInit() returns, and the lookup takes
+    // the whole application down with it.  Messages are buffered and flushed
+    // from simMsg()/renderer callbacks instead; logError() falls back to stderr
+    // until then, which is always safe.
+    deferMessages(true);
+
+    simLib = loadSimLibrary(info->coppeliaSimLibPath);
+    if (simLib == nullptr)
     {
-        simAddLog(info->pluginName,sim_verbosity_errors,"could not find or correctly load the CoppeliaSim library. Cannot start the plugin.");
-        return(0);
+        logError("could not find or correctly load the CoppeliaSim library; cannot start the "
+                 "plugin");
+        deferMessages(false);
+        return 0;
     }
-    if (getSimProcAddresses(simLib)==0)
+
+    if (getSimProcAddresses(simLib) == 0)
     {
-        simAddLog(info->pluginName,sim_verbosity_errors,"could not find all required functions in the CoppeliaSim library. Cannot start the plugin.");
+        logError("could not find all required functions in the CoppeliaSim library; cannot "
+                 "start the plugin");
         unloadSimLibrary(simLib);
-        return(0);
+        simLib = nullptr;
+        deferMessages(false);
+        return 0;
     }
 
-    usingQGLWidget=simGetBoolParam(sim_boolparam_qglwidget)!=0;
+    setLogSink(&logSink);
+    const std::string resources = resourcesDirectory();
+    state().settings = loadRenderSettings(resources.c_str());
+    deferMessages(false);
 
-    return(3);  // 3 since CoppeliaSim V4.6
+    return 3; // plugin interface version, 3 since CoppeliaSim 4.6
 }
 
 SIM_DLLEXPORT void simInit_ui()
@@ -93,448 +878,86 @@ SIM_DLLEXPORT void simInit_ui()
 
 SIM_DLLEXPORT void simCleanup_ui()
 {
-    delete depthShader;
-    delete omniShader;
-
-    meshContainer->removeAll();
-    textureContainer->removeAll();
-    lightContainer->removeAll();
-
-    delete textureContainer;
-    delete meshContainer;
-    delete lightContainer;
-
-    for (size_t i=0;i<oglOffscreens.size();i++)
-        delete oglOffscreens[i];
+    shutdownRenderer();
 }
 
 SIM_DLLEXPORT void simCleanup()
 {
-    unloadSimLibrary(simLib); // release the library
+    flushDeferredMessages();
+    shutdownRenderer();
+    if (simLib != nullptr)
+    {
+        unloadSimLibrary(simLib);
+        simLib = nullptr;
+    }
 }
 
 SIM_DLLEXPORT void simMsg(SSimMsg* info)
 {
-    if (info->msgId==sim_message_eventcallback_instanceswitch)
-        instanceSwitched=true;
+    // The plugin name is registered by now, so messages buffered during
+    // simInit() can be reported.
+    flushDeferredMessages();
+
+    if (info != nullptr && info->msgId == sim_message_eventcallback_instanceswitch)
+        state().instanceSwitchPending = true;
 }
 
-SIM_DLLEXPORT void simMsg_ui(SSimMsg_ui*)
+SIM_DLLEXPORT void simMsg_ui(SSimMsg_ui* info)
 {
-    if (instanceSwitched)
-    {
-        instanceSwitched=false;
+    (void)info;
+    RendererState& s = state();
+    if (!s.instanceSwitchPending)
+        return;
 
-        meshContainer->removeAll();
-        textureContainer->removeAll();
-        lightContainer->removeAll();
+    s.instanceSwitchPending = false;
 
-        for (size_t i=0;i<oglOffscreens.size();i++)
-            delete oglOffscreens[i];
-
-        oglOffscreens.clear();
-    }
+    // Object and texture identifiers are only unique per scene, so every cache
+    // has to go when the scene changes.
+    releaseGlResources();
 }
 
-void executeRenderCommands(bool,int message,void* data)
+SIM_DLLEXPORT void simOpenGL3Renderer(int message, void* data)
 {
-    if (message==sim_message_eventcallback_extrenderer_start)
+    flushDeferredMessages();
+
+    if (data == nullptr)
+        return;
+
+    void** values = static_cast<void**>(data);
+
+    switch (message)
     {
-        // Collect camera and environment data from CoppeliaSim:
-        void** valPtr=(void**)data;
-        resolutionX=((int*)valPtr[0])[0];
-        resolutionY=((int*)valPtr[1])[0];
-        float* backgroundColor=((float*)valPtr[2]);
-        float viewAngle=((float*)valPtr[8])[0];
-        perspectiveOperation=(((int*)valPtr[5])[0]==0);
-        nearClippingPlane=((float*)valPtr[9])[0];
-        farClippingPlane=((float*)valPtr[10])[0];
-        float* amb=(float*)valPtr[11];
-        CPose cameraTranformation(CQuaternion((float*)valPtr[4]),C3Vector((float*)valPtr[3]));
-        C4X4Matrix m4(cameraTranformation.getMatrix());
-        float orthoViewSize=((float*)valPtr[18])[0];
-        visionSensorOrCameraId=((int*)valPtr[19])[0];
-        int posX=0;
-        int posY=0;
-        if ((valPtr[20]!=NULL)&&(valPtr[21]!=NULL))
+    case sim_message_eventcallback_extrenderer_start:
+        handleStart(values);
+        break;
+    case sim_message_eventcallback_extrenderer_light:
+        handleLight(values);
+        break;
+    case sim_message_eventcallback_extrenderer_mesh:
+        handleMesh(values);
+        break;
+    case kMessageExtRendererMarker:
+        handleMarker(values);
+        break;
+    case sim_message_eventcallback_extrenderer_stop:
+        handleStop(values);
+        break;
+    default:
+    {
+        // Report each unknown id once: if the marker callback arrives with a
+        // different value than kMessageExtRendererMarker, this is what shows it.
+        RendererState& s = state();
+        for (int known : s.unknownMessages)
         {
-            posX=((int*)valPtr[20])[0];
-            posY=((int*)valPtr[21])[0];
+            if (known == message)
+                return;
         }
-
-        currentOffscreen=getOffscreen(visionSensorOrCameraId);
-        if (currentOffscreen!=NULL)
-        {
-            if ( (!currentOffscreen->isResolutionSame(resolutionX,resolutionY)) )
-            {
-                removeOffscreen(visionSensorOrCameraId);
-                currentOffscreen=NULL;
-                meshContainer->removeAll();
-                textureContainer->removeAll();
-                lightContainer->removeAll();
-            }
-        }
-        if (currentOffscreen==NULL)
-        {
-            currentOffscreen=new COpenglOffscreen(visionSensorOrCameraId,resolutionX,resolutionY,valPtr[28],usingQGLWidget);
-            meshContainer->removeAll();
-            oglOffscreens.push_back(currentOffscreen);
-        }
-
-        if (currentOffscreen!=NULL)
-        {
-            currentOffscreen->makeContextCurrent();
-            std::string glVersion = std::string((const char*)glGetString(GL_VERSION));
-            float version = std::stof(glVersion);
-            if (version < 3.2)
-            {
-                std::string tmp("this renderer requires atleast OpenGL 3.2. The version available is: ");
-                tmp+=glVersion;
-                simAddLog("OpenGL3Renderer",sim_verbosity_errors,tmp.c_str());
-            }
-
-        //    currentOffscreen->initGL();
-
-            if (omniShader == NULL)
-            {
-                depthShader = new ShaderProgram(":/shadows/depth.vert", ":/shadows/depth.frag", "");
-                omniShader = new ShaderProgram(":/shadows/omni_depth.vert", ":/shadows/omni_depth.frag", "");
-            }
-
-            currentOffscreen->clearBuffers(viewAngle,orthoViewSize,nearClippingPlane,farClippingPlane,perspectiveOperation,backgroundColor);
-
-            // The following instructions have the same effect as gluLookAt()
-            m4.inverse();
-            m4.rotateAroundY(3.14159265359f);
-
-            CMatrix m4_(m4);
-
-            // Set the view matrix
-            QMatrix4x4 m44 = QMatrix4x4(m4_.data.data());
-
-            currentOffscreen->shader->setUniformValue("view", m44);
-
-            QVector3D sceneAmbientLight = QVector3D(amb[0],amb[1],amb[2]);
-            currentOffscreen->shader->setUniformValue("sceneAmbient", sceneAmbientLight);
-
-            activeDirLightCounter=0;
-            activePointLightCounter=0;
-            activeSpotLightCounter=0;
-        }
+        s.unknownMessages.push_back(message);
+        logMessage(sim_verbosity_warnings,
+                   "unhandled ext-renderer message id " + std::to_string(message));
+        break;
     }
-
-    if ( (message==sim_message_eventcallback_extrenderer_light)&&(currentOffscreen!=nullptr) )
-    {
-        // Collect light data from CoppeliaSim (one light at a time):
-        void** valPtr=(void**)data;
-        int lightType=((int*)valPtr[0])[0];
-        float cutoffAngle=((float*)valPtr[1])[0];
-        int spotExponent=((int*)valPtr[2])[0];
-        float* colors=((float*)valPtr[3]);
-        float constAttenuation=((float*)valPtr[4])[0];
-        float linAttenuation=((float*)valPtr[5])[0];
-        float quadAttenuation=((float*)valPtr[6])[0];
-        CPose lightTranformation(CQuaternion((float*)valPtr[8]),C3Vector((float*)valPtr[7]));
-        int lightHandle=((int*)valPtr[13])[0];
-
-        float nearPlane=0.01f;
-        float farPlane=10.0f;
-        float orthoSize=8.0f;
-
-        // Default values gained by tuning on a selection of environements.
-        float bias = 0.001f;
-        float normalBias = 0.012f;
-        if (lightType == sim_light_directional)
-        {
-            normalBias = 0.005f;
-        }
-        else if (lightType == sim_light_spot)
-        {
-            bias = 0.0f;
-            normalBias = 0.00008f;
-        }
-
-
-        // Have the shadow map scale based on the render resolution.
-        int shadowTextureSize=std::max(currentOffscreen->_resX,currentOffscreen->_resY) * 4;
-
-        char* str=simGetExtensionString(lightHandle,-1,"nearPlane@lightProjection@openGL3");
-        if (str!=nullptr)
-        {
-            nearPlane=strtof(str,nullptr);
-            simReleaseBuffer(str);
-        }
-        str=simGetExtensionString(lightHandle,-1,"farPlane@lightProjection@openGL3");
-        if (str!=nullptr)
-        {
-            farPlane=strtof(str,nullptr);
-            simReleaseBuffer(str);
-        }
-        str=simGetExtensionString(lightHandle,-1,"orthoSize@lightProjection@openGL3");
-        if (str!=nullptr)
-        {
-            orthoSize=strtof(str,nullptr);
-            simReleaseBuffer(str);
-        }
-        str=simGetExtensionString(lightHandle,-1,"shadowTextureSize@lightProjection@openGL3");
-        if (str!=nullptr)
-        {
-            shadowTextureSize=atoll(str);
-            simReleaseBuffer(str);
-        }
-        str=simGetExtensionString(lightHandle,-1,"bias@lightProjection@openGL3");
-        if (str!=nullptr)
-        {
-            bias=strtof(str,nullptr);
-            simReleaseBuffer(str);
-        }
-        str=simGetExtensionString(lightHandle,-1,"normalBias@lightProjection@openGL3");
-        if (str!=nullptr)
-        {
-            normalBias=strtof(str,nullptr);
-            simReleaseBuffer(str);
-        }
-
-        // Now set-up that light in OpenGl:
-        C4X4Matrix m(lightTranformation.getMatrix());
-
-        int counter = 0;
-        if (lightType == sim_light_directional)
-        {
-            counter = activeDirLightCounter;
-            activeDirLightCounter++;
-        }
-        else if (lightType == sim_light_omnidirectional)
-        {
-            counter = activePointLightCounter;
-            activePointLightCounter++;
-        }
-        else if (lightType == sim_light_spot)
-        {
-            counter = activeSpotLightCounter;
-            activeSpotLightCounter++;
-        }
-
-        int totalCount = activeDirLightCounter + activePointLightCounter + activeSpotLightCounter;
-        Light* light = lightContainer->getFromId(lightHandle);
-        if(light == NULL)
-        {
-            light = new Light(lightType, shadowTextureSize);
-            lightContainer->add(light);
-        }
-        light->initForCamera(lightHandle, lightType, m, counter, totalCount, colors, constAttenuation, linAttenuation, quadAttenuation, cutoffAngle, spotExponent, nearPlane, farPlane, orthoSize, shadowTextureSize, bias, normalBias, currentOffscreen->shader);
-        light->setPose(lightType, m, currentOffscreen->shader);
-        lightsToRender.push_back(light);
-    }
-
-    if ( (message==sim_message_eventcallback_extrenderer_mesh)&&(currentOffscreen!=nullptr) )
-    {
-        // Collect mesh data from CoppeliaSim:
-        void** valPtr=(void**)data;
-        float* vertices=((float*)valPtr[0]);
-        int verticesCnt=((int*)valPtr[1])[0];
-        int* indices=((int*)valPtr[2]);
-        int triangleCnt=((int*)valPtr[3])[0];
-        float* normals=((float*)valPtr[4]);
-        int normalsCnt=((int*)valPtr[5])[0];
-        float* colors=((float*)valPtr[8]);
-        CPose tr(CQuaternion((float*)valPtr[7]),C3Vector((float*)valPtr[6]));
-        bool textured=((bool*)valPtr[18])[0];
-        float shadingAngle=((float*)valPtr[19])[0];
-        bool translucid=((bool*)valPtr[21])[0];
-        float opacityFactor=((float*)valPtr[22])[0];
-        bool backfaceCulling=((bool*)valPtr[23])[0];
-        int geomId=((int*)valPtr[24])[0];
-        int texId=((int*)valPtr[25])[0];
-        unsigned char* edges=((unsigned char*)valPtr[26]);
-        bool visibleEdges=((bool*)valPtr[27])[0];
-
-        float* texCoords=NULL;
-        int texCoordCnt=0;
-        bool repeatU=false;
-        bool repeatV=false;
-        bool interpolateColors=false;
-        int applyMode=0;
-        Texture* theTexture=NULL;
-        if (textured)
-        {
-            // Read some additional data from CoppeliaSim (i.e. texture data):
-            texCoords=((float*)valPtr[9]);
-            texCoordCnt=((int*)valPtr[10])[0];
-            unsigned char* textureBuff=((unsigned char*)valPtr[11]); // RGBA
-            int textureSizeX=((int*)valPtr[12])[0];
-            int textureSizeY=((int*)valPtr[13])[0];
-            repeatU=((bool*)valPtr[14])[0];
-            repeatV=((bool*)valPtr[15])[0];
-            interpolateColors=((bool*)valPtr[16])[0];
-            applyMode=((int*)valPtr[17])[0];
-
-            theTexture=textureContainer->getFromId(texId);
-            if (theTexture==NULL)
-            {
-                theTexture=new Texture(texId,textureBuff,textureSizeX,textureSizeY);
-                textureContainer->add(theTexture);
-            }
-        }
-        Mesh* mesh=meshContainer->getFromId(geomId);
-        if (mesh==NULL)
-        {
-            mesh=new Mesh(geomId,vertices,verticesCnt*3,indices,triangleCnt*3,normals,normalsCnt*3,texCoords,texCoordCnt*2, edges);
-            meshContainer->add(mesh);
-        }
-        mesh->store(tr,colors,textured,shadingAngle,translucid,opacityFactor,backfaceCulling,repeatU,repeatV,interpolateColors,applyMode,theTexture,visibleEdges);
-        meshesToRender.push_back(mesh);
-    }
-
-    if ( (message==sim_message_eventcallback_extrenderer_stop)&&(currentOffscreen!=nullptr) )
-    {
-        void** valPtr=(void**)data;
-        unsigned char* rgbBuffer=((unsigned char*)valPtr[0]);
-        float* depthBuffer=((float*)valPtr[1]);
-        bool readRgb=((bool*)valPtr[2])[0];
-        bool readDepth=((bool*)valPtr[3])[0];
-
-#ifdef _WIN32
-        static PFNGLACTIVETEXTUREPROC glActiveTexture = (PFNGLACTIVETEXTUREPROC)wglGetProcAddress("glActiveTexture");
-#endif
-
-        if(activeDirLightCounter == 0)
-            currentOffscreen->shader->setUniformValue("dirLightLen", 0);
-        if(activePointLightCounter == 0)
-            currentOffscreen->shader->setUniformValue("pointLightLen", 0);
-        if(activeSpotLightCounter == 0)
-            currentOffscreen->shader->setUniformValue("spotLightLen", 0);
-
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, currentOffscreen->blankTexture);
-
-        // Bind all of the Sampler2D and SampleCubes to an empty texture.
-        int totalCount = activeDirLightCounter + activePointLightCounter + activeSpotLightCounter;
-        for (int i = 0; i < MAX_LIGHTS; i++)
-        {
-            QString depthCubeMaps = "depthCubeMap";
-            depthCubeMaps.append(QString::number(i));
-            currentOffscreen->shader->setUniformValue(depthCubeMaps, 1);
-        }
-
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, currentOffscreen->blankTexture2);
-
-        for (int i = 0; i < MAX_LIGHTS; i++)
-        {
-            QString lightName = "spotLight";
-            lightName.append(QString::number(i));
-            lightName.append(".shadowMap");
-            currentOffscreen->shader->setUniformValue(lightName, 2);
-        }
-
-        for (int i = 0; i < MAX_LIGHTS; i++)
-        {
-            QString lightName = "dirLight";
-            lightName.append(QString::number(i));
-            lightName.append(".shadowMap");
-            currentOffscreen->shader->setUniformValue(lightName, 2);
-        }
-
-        for (int i=0;i<int(lightsToRender.size());i++)
-        {
-            ShaderProgram* depthSh = depthShader;
-            if (lightsToRender[i]->lightType == sim_light_omnidirectional)
-                depthSh = omniShader;
-
-            lightsToRender[i]->renderDepthFromLight(depthSh, meshesToRender);
-        }
-
-        currentOffscreen->makeContextCurrent();
-        currentOffscreen->bindFramebuffer();
-        currentOffscreen->clearViewport();
-        currentOffscreen->shader->bind();
-
-        // It seems Sampler2Ds and SamplerCubes cant match to the same ID
-        int omnis_seen = 0;
-        int spots_seen = 0;
-        int dir_seen = 0;
-
-        // Bind all the lighting textures
-        for (int i=0;i<int(lightsToRender.size());i++)
-        {
-            glActiveTexture(GL_TEXTURE3 + i);
-            if (lightsToRender[i]->lightType == sim_light_omnidirectional)
-            {
-                glBindTexture(GL_TEXTURE_CUBE_MAP, lightsToRender[i]->depthMap);
-                QString depthCubeMaps = "depthCubeMap";
-                depthCubeMaps.append(QString::number(omnis_seen));
-                currentOffscreen->shader->setUniformValue(depthCubeMaps, 3+i);
-                omnis_seen += 1;
-            }
-            else
-            {
-                glBindTexture(GL_TEXTURE_2D, lightsToRender[i]->depthMap);
-                if(lightsToRender[i]->lightType == sim_light_spot)
-                {
-                    QString lightName = "spotLight";
-                    lightName.append(QString::number(spots_seen));
-                    lightName.append(".shadowMap");
-                    currentOffscreen->shader->setUniformValue(lightName, 3+i);
-                    spots_seen += 1;
-                }
-                else if (lightsToRender[i]->lightType == sim_light_directional)
-                {
-                    QString lightName = "dirLight";
-                    lightName.append(QString::number(dir_seen));
-                    lightName.append(".shadowMap");
-                    currentOffscreen->shader->setUniformValue(lightName, 3+i);
-                    dir_seen += 1;
-                }
-            }
-        }
-
-        glActiveTexture(GL_TEXTURE0);
-        for (size_t i=0;i<meshesToRender.size();i++)
-            meshesToRender[i]->render(currentOffscreen->shader);
-
-        lightsToRender.clear();
-        meshesToRender.clear();
-
-        if (readRgb)
-        {
-            glPixelStorei(GL_PACK_ALIGNMENT,1);
-            glReadPixels(0,0,resolutionX,resolutionY,GL_RGB,GL_UNSIGNED_BYTE,rgbBuffer);
-            glPixelStorei(GL_PACK_ALIGNMENT,4);
-        }
-        if (readDepth)
-        {
-            glReadPixels(0,0,resolutionX,resolutionY,GL_DEPTH_COMPONENT,GL_FLOAT,depthBuffer);
-            // Convert this depth info into values corresponding to linear depths (if perspective mode):
-            if (perspectiveOperation)
-            {
-                float farMinusNear= farClippingPlane-nearClippingPlane;
-                float farDivFarMinusNear=farClippingPlane/farMinusNear;
-                float nearTimesFar=nearClippingPlane*farClippingPlane;
-                int v=resolutionX*resolutionY;
-                for (int i=0;i<v;i++)
-                    depthBuffer[i]=((nearTimesFar/(farMinusNear*(farDivFarMinusNear-depthBuffer[i])))-nearClippingPlane)/farMinusNear;
-            }
-        }
-
-//        meshContainer->removeAll(); // when objects are dynamically added, might not render in all views... one could always remove them all, which goes 10% slower
-//        textureContainer->removeAll();
-        lightContainer->removeAll(); // need to remove all for correct shadow rendering
-        meshContainer->decrementAllUsedCount();
-        meshContainer->removeAllUnused();
-        textureContainer->decrementAllUsedCount();
-        textureContainer->removeAllUnused();
-//        lightContainer->decrementAllUsedCount();
-//        lightContainer->removeAllUnused();
-
-        currentOffscreen->unbindFramebuffer();
-        currentOffscreen->doneCurrentContext();
-
-        currentOffscreen=NULL;
     }
 }
 
-SIM_DLLEXPORT void simOpenGL3Renderer(int message,void* data)
-{
-    executeRenderCommands(false,message,data);
-}
+

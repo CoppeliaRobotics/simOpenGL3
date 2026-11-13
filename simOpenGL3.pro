@@ -1,130 +1,109 @@
+# Modern shader based external renderer for CoppeliaSim.
+#
+# The target name is deliberately "simOpenGL3": CoppeliaSim resolves the
+# renderer plugin by that name (SIMOPENGL3_DEFAULT in pluginContainer.cpp) and
+# calls the "simOpenGL3Renderer" entry point it exports, so this build replaces
+# the legacy renderer without any engine change.
+#
+# No Qt: the off-screen context comes from WGL (Windows), EGL (Linux) or CGL
+# (macOS), see the platform sources below.
+
 TARGET = simOpenGL3
 TEMPLATE = lib
 DEFINES -= UNICODE
-CONFIG += shared plugin
-QT     += widgets opengl printsupport #printsupport required from MacOS, otherwise crashes strangely ('This CONFIG += shared
+CONFIG += shared plugin c++17
+CONFIG -= app_bundle
+CONFIG += console
+
+# qmake links core and gui by default; this plugin needs neither.
+QT -= core gui
 
 win32 {
-    DEFINES += WIN_SIM
-    greaterThan(QT_MAJOR_VERSION,4) {
-        greaterThan(QT_MINOR_VERSION,4) {
-            LIBS += -lopengl32
-        }
-    }
-}
-
-macx {
-    INCLUDEPATH += "/usr/local/include"
-    DEFINES += MAC_SIM
+    DEFINES += WIN_SIM NOMINMAX _USE_MATH_DEFINES
+    LIBS += -lopengl32 -lgdi32 -luser32
 }
 
 unix:!macx {
     DEFINES += LIN_SIM
+    LIBS += -lEGL -ldl
 }
 
+macx {
+    DEFINES += MAC_SIM
+    LIBS += -framework OpenGL
+}
 
 *-msvc* {
-        QMAKE_CXXFLAGS += -O2
-        QMAKE_CXXFLAGS += -W3
+    QMAKE_CXXFLAGS += /W4 /permissive-
+    QMAKE_CXXFLAGS -= -W3
 }
 *-g++* {
-        QMAKE_CXXFLAGS += -O3
-        QMAKE_CXXFLAGS += -Wall
-        QMAKE_CXXFLAGS += -fvisibility=hidden
-        QMAKE_CXXFLAGS += -Wno-unused-parameter
-        QMAKE_CXXFLAGS += -Wno-strict-aliasing
-        QMAKE_CXXFLAGS += -Wno-empty-body
-        QMAKE_CXXFLAGS += -Wno-write-strings
-
-        QMAKE_CXXFLAGS += -Wno-unused-but-set-variable
-        QMAKE_CXXFLAGS += -Wno-unused-local-typedefs
-        QMAKE_CXXFLAGS += -Wno-narrowing
-
-        QMAKE_CFLAGS += -O3
-        QMAKE_CFLAGS += -Wall
-        QMAKE_CFLAGS += -Wno-strict-aliasing
-        QMAKE_CFLAGS += -Wno-unused-parameter
-        QMAKE_CFLAGS += -Wno-unused-but-set-variable
-        QMAKE_CFLAGS += -Wno-unused-local-typedefs
+    QMAKE_CXXFLAGS += -O3 -Wall -fvisibility=hidden
+    QMAKE_CXXFLAGS += -Wno-unused-parameter
+    QMAKE_CXXFLAGS += -Wno-narrowing
 }
 
-INCLUDEPATH += "../include"
+# programming/include, i.e. the directory that contains simLib-2/ and simMath/.
+# Override on the command line when building against another CoppeliaSim
+# version, e.g. qmake "COPPELIASIM_INCLUDE_DIR=C:/coppeliaSim/programming/include"
+isEmpty(COPPELIASIM_INCLUDE_DIR): COPPELIASIM_INCLUDE_DIR = $$PWD/../include
+INCLUDEPATH += $$COPPELIASIM_INCLUDE_DIR
 
 SOURCES += \
-    ../include/simLib/simLib.cpp \
-    sourceCode/light.cpp \
-    sourceCode/mesh.cpp \
-    sourceCode/shaderProgram.cpp \
-    sourceCode/texture.cpp \
+    $$COPPELIASIM_INCLUDE_DIR/simLib-2/simLib.cpp \
     sourceCode/simOpenGL3.cpp \
-    sourceCode/frameBufferObject.cpp \
-    sourceCode/offscreenGlContext.cpp \
-    sourceCode/openglOffscreen.cpp \
-    sourceCode/openglBase.cpp \
-    ../include/simMath/mathFuncs.cpp \
-    ../include/simMath/3Vector.cpp \
-    ../include/simMath/4Vector.cpp \
-    ../include/simMath/7Vector.cpp \
-    ../include/simMath/3X3Matrix.cpp \
-    ../include/simMath/4X4Matrix.cpp \
-    ../include/simMath/mXnMatrix.cpp \
+    sourceCode/sceneRenderer.cpp \
+    sourceCode/shadowAtlas.cpp \
+    sourceCode/offscreenTarget.cpp \
+    sourceCode/offscreenContextCommon.cpp \
+    sourceCode/glUtil.cpp \
+    sourceCode/glApi.cpp \
+    sourceCode/log.cpp \
+    sourceCode/renderSettings.cpp \
 
-HEADERS +=\
-    ../include/simLib/simLib.h \
-    sourceCode/container.h \
-    sourceCode/light.h \
-    sourceCode/mesh.h \
-    sourceCode/shaderProgram.h \
-    sourceCode/texture.h \
-    sourceCode/simOpenGL3.h \
-    sourceCode/frameBufferObject.h \
-    sourceCode/offscreenGlContext.h \
-    sourceCode/openglOffscreen.h \
-    sourceCode/openglBase.h \
-    ../include/simMath/mathFuncs.h \
-    ../include/simMath/mathDefines.h \
-    ../include/simMath/3Vector.h \
-    ../include/simMath/4Vector.h \
-    ../include/simMath/7Vector.h \
-    ../include/simMath/3X3Matrix.h \
-    ../include/simMath/4X4Matrix.h \
-    ../include/simMath/mXnMatrix.h \
-
-unix:!symbian {
-    maemo5 {
-        target.path = /opt/usr/lib
-    } else {
-        target.path = /usr/lib
-    }
-    INSTALLS += target
+win32 {
+    SOURCES += sourceCode/offscreenContextWin32.cpp
+}
+unix:!macx {
+    SOURCES += sourceCode/offscreenContextEgl.cpp
+}
+macx {
+    SOURCES += sourceCode/offscreenContextCgl.cpp
 }
 
+HEADERS += \
+    $$COPPELIASIM_INCLUDE_DIR/simLib-2/simLib.h \
+    sourceCode/simOpenGL3.h \
+    sourceCode/sceneRenderer.h \
+    sourceCode/sceneTypes.h \
+    sourceCode/shadowAtlas.h \
+    sourceCode/offscreenTarget.h \
+    sourceCode/offscreenContext.h \
+    sourceCode/glUtil.h \
+    sourceCode/glApi.h \
+    sourceCode/math3d.h \
+    sourceCode/log.h \
+    sourceCode/renderSettings.h \
+    sourceCode/shaders_embedded.h
+
 DISTFILES += \
-    resources/default.vert \
-    resources/default.frag \
-    resources/depth.frag \
-    resources/depth.vert \
-    resources/omni_depth.vert \
-    resources/omni_depth.frag
+    simOpenGL3.ini \
+    resources/shaders/common.glsl \
+    resources/shaders/scene.vert \
+    resources/shaders/scene.frag \
+    resources/shaders/depth.vert \
+    resources/shaders/depth.frag \
+    resources/shaders/depth_omni.vert \
+    resources/shaders/depth_omni.frag \
+    resources/shaders/fullscreen.vert \
+    resources/shaders/tonemap.frag \
+    resources/shaders/marker.vert \
+    resources/shaders/marker.frag \
+    resources/shaders/colorcode.vert \
+    resources/shaders/colorcode.frag \
+    lua/simOpenGL3.lua \
 
-RESOURCES += \
-    resources/res.qrc
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+unix:!symbian {
+    target.path = /usr/lib
+    INSTALLS += target
+}

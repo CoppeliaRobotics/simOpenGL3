@@ -1,22 +1,26 @@
-.qmake.stash
+# Build output of the plugin and of the developer tools
 Makefile
-*.o
-moc_*.cpp
-moc_*.h
-ui_colladadialog.h
-libsimOpenGL3.1.0.0.dylib
-libsimOpenGL3.1.0.dylib
-libsimOpenGL3.1.dylib
-libsimOpenGL3.dylib
-libsimOpenGL3.so
-libsimOpenGL3.so.1
-libsimOpenGL3.so.1.0
-libsimOpenGL3.so.1.0.0
 Makefile.Debug
 Makefile.Release
-object_script.*.Debug
-object_script.*.Release
+.qmake.stash
+*.obj
+*.o
+*.exp
+*.pdb
+*.ilk
 debug/
 release/
-mocinclude.opt
-simOpenGL3.pro.user
+moc_*.cpp
+moc_*.h
+
+# Qt Creator's per user project state
+*.pro.user
+*.pro.user.*
+
+# Library names produced by installs on other platforms
+libsimOpenGL3.dylib
+libsimOpenGL3.*.dylib
+libsimOpenGL3.so
+libsimOpenGL3.so.*
+simOpenGL3.dll
+simOpenGL3.lib
