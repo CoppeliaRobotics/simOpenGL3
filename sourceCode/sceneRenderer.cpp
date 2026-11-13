@@ -1159,8 +1159,7 @@ void SceneRenderer::renderMarkers(GLFuncs& gl, const FrameData& frame)
         Vec3 rgb(float(rgba[0]) / 255.0f, float(rgba[1]) / 255.0f, float(rgba[2]) / 255.0f);
         if (gamma)
             rgb = linearFromSrgb(rgb);
-        // The alpha channel of a marker colour is ignored: markers are opaque.
-        return Vec4(rgb, 1.0f);
+        return Vec4(rgb, float(rgba[3]) / 255.0f);
     };
 
     for (const MarkerItem& marker : frame.markers)
@@ -1520,7 +1519,15 @@ void SceneRenderer::renderMarkers(GLFuncs& gl, const FrameData& frame)
     // affected by face culling.
     gl.glEnable(GL_CULL_FACE);
     gl.glCullFace(GL_BACK);
-    gl.glDisable(GL_BLEND);
+    if (colorCoded)
+    {
+        gl.glDisable(GL_BLEND); // the handle bytes must reach the image untouched
+    }
+    else
+    {
+        gl.glEnable(GL_BLEND);
+        gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    }
 
 
     const auto drawBatches = [&](GLsizei pointFirst, GLsizei lineFirst, GLsizei triangleFirst,
@@ -1638,6 +1645,16 @@ void SceneRenderer::renderFrame(GLFuncs& gl, OffscreenTarget& target, FrameData&
         // would corrupt the decoded handle.  The background is white, which is
         // what CoppeliaSim's own color coded pass uses for "no object".
         target.beginScene(gl, Vec3(1.0f, 1.0f, 1.0f));
+
+        // beginScene() only binds the target and clears it, and this pass calls
+        // drawRuns() directly instead of renderOpaque(), so the depth state has
+        // to be established here.  Without it the depth test stays off (the tone
+        // map pass leaves it disabled) and everything - markers included - is
+        // drawn in submission order, as if every item were an overlay.
+        gl.glEnable(GL_DEPTH_TEST);
+        gl.glDepthFunc(GL_LEQUAL);
+        gl.glDepthMask(GL_TRUE);
+        gl.glDisable(GL_BLEND);
 
         m_colorCodeProgram.use(gl);
         m_colorCodeProgram.set(gl, m_uColorCodeViewProjection, m_camera.viewProjection);

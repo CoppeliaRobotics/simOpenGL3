@@ -65,8 +65,10 @@ scene with four vision sensors uploaded every mesh and every texture four times.
   with the depth buffer still being written.
 * Shapes honour CoppeliaSim's per-shape back-face culling flag (`data[23]`) in
   every pass (shaded, colour coded, depth prepass and shadow maps). Markers
-  always cull their back faces, whatever the settings say, and are drawn opaque:
-  the alpha channel of a marker colour is ignored.
+  always cull their back faces, whatever the settings say, and are blended with
+  their colour's alpha channel (the pass enables `GL_SRC_ALPHA,
+  GL_ONE_MINUS_SRC_ALPHA`, except in colour coded frames where the handle bytes
+  must survive untouched).
 * Environment fog is supported (linear / exponential / exponential squared).
 
 ### Vertex layout — the one thing to get right

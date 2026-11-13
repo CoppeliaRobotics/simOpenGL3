@@ -364,6 +364,18 @@ int main(int, char**)
             frame.markers.push_back(std::move(plain));
         }
         {
+            // Half transparent square over the middle: the alpha channel has to
+            // reach the image, so the scene behind must show through it.
+            MarkerItem translucent;
+            translucent.type = markerTypeSquares;
+            translucent.options = 0;
+            translucent.points = {0.0f, 2.6f, 0.0f};
+            translucent.quats = {-0.70710678f, 0.0f, 0.0f, 0.70710678f};
+            translucent.colors = {255, 255, 255, 128};
+            translucent.sizes = {3.0f, 3.0f, 1.0f};
+            frame.markers.push_back(std::move(translucent));
+        }
+        {
             MarkerItem flat;
             flat.type = markerTypeCylinders;
             flat.options = markerOptionNotShaded;
@@ -585,6 +597,38 @@ int main(int, char**)
         {
             logError("colour coded frame did not encode the marker handle");
             return 14;
+        }
+    }
+
+    // Depth must actually be tested in a colour coded frame: a marker placed
+    // behind the quad must be hidden by it instead of being drawn on top.
+    {
+        FrameData depthFrame;
+        depthFrame.camera = codedFrame.camera;
+        depthFrame.items.push_back(quad);
+
+        MarkerItem behind;
+        behind.type = markerTypeSquares;
+        behind.handle = 0x00BEEF;
+        behind.points = {0.0f, -2.0f, 0.0f}; // below the ground quad: further away
+        behind.quats = {-0.70710678f, 0.0f, 0.0f, 0.70710678f};
+        behind.colors = {255, 255, 255, 255};
+        behind.sizes = {6.0f, 6.0f, 1.0f};
+        depthFrame.markers.push_back(std::move(behind));
+
+        std::vector<unsigned char> depthRgb(std::size_t(width) * std::size_t(height) * 3, 0);
+        codedRenderer.renderFrame(*gl, codedTarget, depthFrame, depthRgb.data(), nullptr, true,
+                                  false);
+
+        std::printf("colour coded depth test pixel %u %u %u (expect the quad %u %u %u)\n",
+                    depthRgb[codedCentre], depthRgb[codedCentre + 1], depthRgb[codedCentre + 2],
+                    expectedR, expectedG, expectedB);
+
+        if (depthRgb[codedCentre] != expectedR || depthRgb[codedCentre + 1] != expectedG ||
+            depthRgb[codedCentre + 2] != expectedB)
+        {
+            logError("a marker behind the geometry was drawn in front of it");
+            return 15;
         }
     }
 

@@ -701,10 +701,13 @@ void main()
         lighting += light.colorIntensity.rgb * nDotL * attenuation;
     }
 
-    // Markers are opaque: any alpha in the source colour is ignored.
+    // The marker colour keeps its alpha; the marker pass blends it (and turns
+    // blending off for colour coded frames, where the handle bytes must survive).
     float lit = vLit * float(uLit);
-    FragColor = vec4(vColor.rgb * mix(vec3(1.0), lighting, lit), 1.0);
+    FragColor = vec4(vColor.rgb * mix(vec3(1.0), lighting, lit), vColor.a);
 }
+
+
 
 
 
