@@ -61,6 +61,7 @@ struct RendererState
 
     std::vector<int> unknownMessages;
     bool markerReported = false;
+    bool markerSizesReported = false;
     bool markerRejectedReported = false;
 };
 
@@ -652,19 +653,29 @@ void handleMarker(void** data)
     const float* points = data[3] != nullptr ? *static_cast<const float* const*>(data[3]) : nullptr;
     if (points == nullptr || pointDataCount <= 0)
     {
-        if (!s.markerRejectedReported)
+        // A custom mesh is described entirely by its vertices and indices, so it
+        // is still renderable without a point list: place it at the origin.
+        if (type != markerTypeCustom)
         {
-            s.markerRejectedReported = true;
-            logMessage(sim_verbosity_warnings,
-                       "marker callback without usable data (points=" +
-                           std::to_string(points != nullptr ? 1 : 0) + ", count=" +
-                           std::to_string(pointDataCount) + ")");
+            if (!s.markerRejectedReported)
+            {
+                s.markerRejectedReported = true;
+                logMessage(sim_verbosity_warnings,
+                           "marker callback without usable data (points=" +
+                               std::to_string(points != nullptr ? 1 : 0) + ", count=" +
+                               std::to_string(pointDataCount) + ")");
+            }
+            return;
         }
-        return;
+        marker.points.assign({0.0f, 0.0f, 0.0f});
+    }
+    else
+    {
+        const int pointCount = pointDataCount / 3;
+        marker.points.assign(points, points + std::size_t(pointCount) * 3);
     }
 
-    const int pointCount = pointDataCount / 3;
-    marker.points.assign(points, points + std::size_t(pointCount) * 3);
+    const int pointCount = int(marker.points.size() / 3);
 
     // How the optional arrays are sized depends on the type, and guessing wrong
     // means reading past the end of the engine's vector:
@@ -711,44 +722,70 @@ void handleMarker(void** data)
 
     if (type == markerTypeCustom)
     {
-        const int vertexCount = readInt(data[9], 0); // vertex count or float count
+        // Custom mesh payload:
+        //   data[8]/data[9]   vertices, 3 floats per point
+        //   data[10]/data[11] indices, 3 per triangle, zero based into the
+        //                     vertices
+        //   data[12]          optional normals, 3 floats per index, i.e. one
+        //                     vector per triangle corner
+        //
+        // The counts are used as the engine hands them over (elements of the
+        // matching array), and the vertex copy is cut at the highest index that
+        // is actually referenced, which is always inside the array and all the
+        // renderer needs.
+        if (marker.quats.empty())
+            marker.quats.assign({0.0f, 0.0f, 0.0f, 1.0f}); // identity, (x, y, z, w)
+        if (marker.sizes.empty())
+            marker.sizes.assign({1.0f, 1.0f, 1.0f});
+
+        const int reportedVertexCount = readInt(data[9], 0);
         const int indexCount = readInt(data[11], 0);
-        if (data[10] != nullptr && indexCount > 0)
+        if (indexCount <= 0 || (indexCount % 3) != 0)
+            return;
+
+        if (data[10] != nullptr)
         {
             const int* indices = *static_cast<const int* const*>(data[10]);
             if (indices != nullptr)
-                marker.indices.assign(indices, indices + indexCount);
+                marker.indices.assign(indices, indices + std::size_t(indexCount));
         }
-        if (data[8] != nullptr && !marker.indices.empty())
+        if (marker.indices.empty())
+            return;
+
+        int highestIndex = 0;
+        for (int index : marker.indices)
         {
-            // Cut the vertex copy at the highest index actually referenced: that
-            // is always inside the array, whether the engine reports the number
-            // of vertices or the number of floats, and it is all the renderer
-            // needs.
-            int highestIndex = 0;
-            for (int index : marker.indices)
-            {
-                if (index > highestIndex)
-                    highestIndex = index;
-            }
+            if (index > highestIndex)
+                highestIndex = index;
+        }
+
+        if (data[8] != nullptr)
+        {
             const float* vertices = *static_cast<const float* const*>(data[8]);
             if (vertices != nullptr && highestIndex >= 0 && highestIndex < 10000000)
-            {
                 marker.vertices.assign(vertices,
                                        vertices + (std::size_t(highestIndex) + 1) * 3);
-            }
-        }
-        else if (data[8] != nullptr && vertexCount > 0)
-        {
-            const float* vertices = *static_cast<const float* const*>(data[8]);
-            if (vertices != nullptr)
-                marker.vertices.assign(vertices, vertices + std::size_t(vertexCount));
         }
         if (data[12] != nullptr)
         {
             const float* normals = *static_cast<const float* const*>(data[12]);
             if (normals != nullptr)
                 marker.normals.assign(normals, normals + std::size_t(indexCount) * 3);
+        }
+
+        // One line per run with the numbers the engine reports, so a unit
+        // mismatch is visible instead of guessed: the vertices, indices and
+        // normals below are the sizes actually copied.
+        if (!s.markerSizesReported)
+        {
+            s.markerSizesReported = true;
+            logMessage(sim_verbosity_warnings,
+                       std::string("custom marker: engine reports ") +
+                           std::to_string(reportedVertexCount) + " vertices and " +
+                           std::to_string(indexCount) + " indices; copied " +
+                           std::to_string(marker.vertices.size() / 3) + " vertices, " +
+                           std::to_string(marker.indices.size()) + " indices, " +
+                           std::to_string(marker.normals.size() / 3) + " normals");
         }
     }
 

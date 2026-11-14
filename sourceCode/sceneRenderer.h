@@ -63,8 +63,9 @@ struct CameraData
 //   quats    4 floats per item, only for the one-point primitives and custom
 //   sizes    3 floats per item for those same types, but a tube carries a single
 //            size triple whose first float is the radius
-//   custom   vertices are copied up to the highest index referenced, which is
-//            valid whether the engine reports a vertex count or a float count
+//   custom   data[8]/[9] vertices (3 floats per point), data[10]/[11] indices
+//            (3 per triangle, zero based into the vertices), data[12] optional
+//            normals, 3 floats per index, i.e. one per triangle corner
 struct MarkerItem
 {
     int type = 0;
