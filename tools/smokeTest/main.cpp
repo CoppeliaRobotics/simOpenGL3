@@ -184,6 +184,105 @@ void writeFlippedPng(const char* path, const std::vector<unsigned char>& rgb, in
         std::printf("warning: cannot write %s\n", path);
 }
 
+// Counts pixels close to an exact colour: the point cloud and oc-tree passes are
+// unlit, so their pixels are the authored value.
+// Centroid of the pixels matching a colour, in image coordinates.
+bool colorCentroid(const std::vector<unsigned char>& rgb, int width, int height, int r, int g,
+                   int b, int tolerance, double& outX, double& outY)
+{
+    double sumX = 0.0;
+    double sumY = 0.0;
+    int count = 0;
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            const std::size_t i = (std::size_t(y) * width + x) * 3;
+            if (std::abs(int(rgb[i]) - r) <= tolerance && std::abs(int(rgb[i + 1]) - g) <= tolerance &&
+                std::abs(int(rgb[i + 2]) - b) <= tolerance)
+            {
+                sumX += x;
+                sumY += y;
+                ++count;
+            }
+        }
+    }
+    if (count == 0)
+        return false;
+    outX = sumX / count;
+    outY = sumY / count;
+    return true;
+}
+
+// Centroid of the pixels matching a predicate (lit geometry is scaled by the
+// lighting, so a hue is used rather than an exact colour).
+template <typename Predicate>
+bool centroidIf(const std::vector<unsigned char>& rgb, int width, int height, Predicate predicate,
+                double& outX, double& outY)
+{
+    double sumX = 0.0;
+    double sumY = 0.0;
+    int count = 0;
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            const std::size_t base = (std::size_t(y) * width + x) * 3;
+            if (predicate(rgb[base], rgb[base + 1], rgb[base + 2]))
+            {
+                sumX += x;
+                sumY += y;
+                ++count;
+            }
+        }
+    }
+    if (count == 0)
+        return false;
+    outX = sumX / count;
+    outY = sumY / count;
+    return true;
+}
+// Where a world point lands in the image (the read-back is bottom up, so y is
+// flipped here).
+bool projectPoint(const Mat4& viewProjection, const Vec3& world, int width, int height,
+                  double& outX, double& outY)
+{
+    const Vec4 clip = viewProjection * Vec4(world, 1.0f);
+    if (clip.w() <= 1e-6f)
+        return false;
+    outX = (double(clip.x() / clip.w()) * 0.5 + 0.5) * width;
+    // The read-back buffer is bottom up, so no flip here.
+    outY = (double(clip.y() / clip.w()) * 0.5 + 0.5) * height;
+    return true;
+}
+// Counts pixels matching a predicate: lit geometry is scaled by the lighting, so
+// the tests look for a hue rather than an exact value.
+template <typename Predicate>
+int countIf(const std::vector<unsigned char>& rgb, int width, int height, Predicate predicate)
+{
+    int count = 0;
+    for (int i = 0; i < width * height; ++i)
+    {
+        const std::size_t base = std::size_t(i) * 3;
+        if (predicate(rgb[base], rgb[base + 1], rgb[base + 2]))
+            ++count;
+    }
+    return count;
+}
+int countColor(const std::vector<unsigned char>& rgb, int width, int height, int r, int g, int b,
+               int tolerance)
+{
+    int count = 0;
+    for (int i = 0; i < width * height; ++i)
+    {
+        const int dr = std::abs(int(rgb[std::size_t(i) * 3 + 0]) - r);
+        const int dg = std::abs(int(rgb[std::size_t(i) * 3 + 1]) - g);
+        const int db = std::abs(int(rgb[std::size_t(i) * 3 + 2]) - b);
+        if (dr <= tolerance && dg <= tolerance && db <= tolerance)
+            ++count;
+    }
+    return count;
+}
 int countNonBackground(const std::vector<unsigned char>& rgb, int width, int height)
 {
     int count = 0;
@@ -448,6 +547,67 @@ int main(int, char**)
     std::vector<unsigned char> rgb(std::size_t(width) * std::size_t(height) * 3, 0);
     std::vector<float> depth(std::size_t(width) * std::size_t(height), 1.0f);
 
+    // A point cloud and an oc-tree, both with a colour no material uses, so the
+    // pixels they produce can be asserted.
+    {
+        PointCloudItem cloud;
+        cloud.positions = {-3.0f, 4.0f, 0.0f, -2.4f, 4.0f, 0.0f, -1.8f, 4.0f, 0.0f,
+                           -1.2f, 4.0f, 0.0f, -0.6f, 4.0f, 0.0f};
+        cloud.pointSize = 12.0f;
+        cloud.handle = 0x1001;
+        cloud.transform.setToIdentity();
+        for (int i = 0; i < 5; ++i)
+        {
+            cloud.colors.push_back(0);
+            cloud.colors.push_back(255);
+            cloud.colors.push_back(255);
+            cloud.colors.push_back(255);
+        }
+        frame.pointClouds.push_back(std::move(cloud));
+
+        OctreeItem octree;
+        octree.positions = {2.2f, 4.2f, 0.0f, 2.8f, 4.2f, 0.0f, 2.2f, 4.8f, 0.0f};
+        octree.voxelSize = 0.5f;
+        octree.handle = 0x1002;
+        octree.transform.setToIdentity();
+        for (int i = 0; i < 3; ++i)
+        {
+            octree.colors.push_back(255);
+            octree.colors.push_back(0);
+            octree.colors.push_back(255);
+            octree.colors.push_back(255);
+        }
+        frame.octrees.push_back(std::move(octree));
+
+        // A posed, realistic octree: thousands of voxels of 0.025 m, turned 90
+        // degrees about Z and offset, like an octree that was built elsewhere in
+        // the scene.
+        OctreeItem big;
+        big.handle = 0x1003;
+        big.voxelSize = 0.025f;
+        big.transform.setToIdentity();
+        big.transform.translate(-2.4f, 3.4f, 2.2f);
+        big.transform.rotate(90.0f, 0.0f, 0.0f, 1.0f);
+        const int side = 16; // 4096 voxels
+        for (int z = 0; z < side; ++z)
+        {
+            for (int y = 0; y < side; ++y)
+            {
+                for (int x = 0; x < side; ++x)
+                {
+                    big.positions.push_back(float(x - side / 2) * 0.025f);
+                    big.positions.push_back(float(y - side / 2) * 0.025f);
+                    big.positions.push_back(float(z - side / 2) * 0.025f);
+                    big.colors.push_back(255);
+                    big.colors.push_back(128);
+                    big.colors.push_back(0);
+                    big.colors.push_back(255);
+                }
+            }
+        }
+        frame.octrees.push_back(std::move(big));
+    }
+
     renderer.renderFrame(*gl, target, frame, rgb.data(), depth.data(), true, true);
 
     const SceneRenderer::Statistics& stats = renderer.statistics();
@@ -456,6 +616,30 @@ int main(int, char**)
                 stats.shadowLayers);
 
     writeFlippedPng("smoke.png", rgb, width, height);
+
+    // Point cloud and oc-tree pixels: cyan and magenta are not used by any
+    // material in this scene, so finding them proves both passes ran.
+    const int cloudPixels = countColor(rgb, width, height, 0, 255, 255, 6);
+    const int voxelPixels = countIf(rgb, width, height, [](unsigned char r, unsigned char g,
+                                                          unsigned char b) {
+        return r > 70 && b > 70 && g < 45 && std::abs(int(r) - int(b)) < 40;
+    });
+    const int posedPixels = countIf(rgb, width, height, [](unsigned char r, unsigned char g,
+                                                           unsigned char b) {
+        return r > 90 && g > 35 && g < 170 && b < 45;
+    });
+    std::printf("point cloud pixels %d, oc-tree pixels %d, posed oc-tree pixels %d\n", cloudPixels,
+                voxelPixels, posedPixels);
+    if (posedPixels < 500)
+    {
+        logError("a posed, large octree did not reach the image");
+        return 18;
+    }
+    if (cloudPixels < 20 || voxelPixels < 200)
+    {
+        logError("point cloud or oc-tree geometry did not reach the image");
+        return 16;
+    }
 
     const int nonBackground = countNonBackground(rgb, width, height);
     float minimumDepth = 1.0f;
@@ -599,6 +783,38 @@ int main(int, char**)
             logError("colour coded frame did not encode the marker handle");
             return 14;
         }
+
+
+    }
+
+    // A colour coded oc-tree: the voxel colour must be its object handle,
+    // (0xA0B0 & 255, >> 8 & 255, >> 16 & 255) = (176, 160, 0).
+    {
+        FrameData voxelFrame;
+        voxelFrame.camera = codedFrame.camera;
+
+        OctreeItem voxel;
+        voxel.handle = 0x00A0B0;
+        voxel.voxelSize = 6.0f;
+        voxel.positions = {0.0f, -1.5f, 0.0f};
+        voxel.colors = {255, 255, 255, 255};
+        voxel.transform.setToIdentity();
+        voxelFrame.octrees.push_back(std::move(voxel));
+
+        std::vector<unsigned char> voxelRgb(std::size_t(width) * std::size_t(height) * 3, 0);
+        codedRenderer.renderFrame(*gl, codedTarget, voxelFrame, voxelRgb.data(), nullptr, true,
+                                  false);
+
+        std::printf("colour coded oc-tree pixel %u %u %u (expect 176 160 0), coded=%d corner=%u %u %u",
+                    voxelRgb[codedCentre], voxelRgb[codedCentre + 1], voxelRgb[codedCentre + 2],
+                    int(voxelFrame.camera.colorCoded), voxelRgb[0], voxelRgb[1], voxelRgb[2]);
+        std::printf("\n");
+        if (voxelRgb[codedCentre] != 176 || voxelRgb[codedCentre + 1] != 160 ||
+            voxelRgb[codedCentre + 2] != 0)
+        {
+            logError("colour coded frame did not encode the octree handle");
+            return 17;
+        }
     }
 
     // Depth must actually be tested in a colour coded frame: a marker placed
@@ -712,6 +928,71 @@ int main(int, char**)
     }
 
 
+    // The octree must stay at the same world position whatever the camera does.
+    // Two cameras, same frame: the rendered centroid has to follow the projected
+    // centre of the octree's world bounding box.
+    {
+        FrameData probeFrame;
+        probeFrame.camera = frame.camera;
+        probeFrame.lights = frame.lights;
+
+        OctreeItem probe;
+        probe.handle = 0x2001;
+        probe.voxelSize = 0.25f;
+        probe.transform.setToIdentity();
+        probe.transform.translate(-1.0f, 1.5f, 0.0f);
+        for (int i = 0; i < 8; ++i)
+        {
+            probe.positions.push_back(float(i % 2) * 0.5f - 0.25f);
+            probe.positions.push_back(float((i / 2) % 2) * 0.5f - 0.25f);
+            probe.positions.push_back(float(i / 4) * 0.5f - 0.25f);
+            probe.colors.push_back(0);
+            probe.colors.push_back(255);
+            probe.colors.push_back(0);
+            probe.colors.push_back(255);
+        }
+        probeFrame.octrees.push_back(probe);
+
+        const Vec3 worldCentre(-1.0f, 1.5f, 0.0f);
+        const Vec3 cameras[2] = {Vec3(5.5f, 4.5f, 6.5f), Vec3(-6.0f, 3.0f, 4.0f)};
+        for (int c = 0; c < 2; ++c)
+        {
+            probeFrame.camera = makeCamera(width, height, cameras[c], Vec3(0.0f, 0.9f, 0.0f),
+                                           Vec3(0.0f, 1.0f, 0.0f), true, 45.0f);
+
+            std::vector<unsigned char> probeRgb(std::size_t(width) * std::size_t(height) * 3, 0);
+            renderer.renderFrame(*gl, target, probeFrame, probeRgb.data(), nullptr, true, false);
+            probeFrame.camera = makeCamera(width, height, cameras[c], Vec3(0.0f, 0.9f, 0.0f),
+                                           Vec3(0.0f, 1.0f, 0.0f), true, 45.0f);
+            renderer.renderFrame(*gl, target, probeFrame, probeRgb.data(), nullptr, true, false);
+
+            double shownX = 0.0;
+            double shownY = 0.0;
+            double expectedX = 0.0;
+            double expectedY = 0.0;
+            const bool found = centroidIf(probeRgb, width, height,
+                                          [](unsigned char r, unsigned char g, unsigned char b) {
+                                              // the probe frame holds nothing but the octree, so
+                                              // any green dominant pixel belongs to it
+                                              return g > 10 && g > r + 4 && g > b + 4;
+                                          },
+                                          shownX, shownY);
+            const bool projected = projectPoint(probeFrame.camera.viewProjection, worldCentre, width,
+                                               height, expectedX, expectedY);
+            const int chosenCentreX = int(expectedX);
+            const int chosenCentreY = int(expectedY);
+            std::printf("camera %d: centroid (%.1f, %.1f), projected (%.1f, %.1f), voxels %d, nonbg %d, coded %d",
+                        c, shownX, shownY, expectedX, expectedY, int(probe.positions.size() / 3),
+                        countNonBackground(probeRgb, width, height), int(probeFrame.camera.colorCoded));
+            std::printf("\n");
+            if (!found || !projected || std::abs(shownX - expectedX) > 12.0 ||
+                std::abs(shownY - expectedY) > 12.0)
+            {
+                logError("the octree does not stay at its world position");
+                return 19;
+            }
+        }
+    }
     renderer.shutdown(*gl);
     context.doneCurrent();
 
@@ -730,6 +1011,7 @@ int main(int, char**)
         logError("the orthographic image is almost empty");
         return 10;
     }
+
     std::printf("SMOKE TEST PASSED\n");
     return 0;
 }

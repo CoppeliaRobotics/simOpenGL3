@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -792,6 +794,302 @@ void handleMarker(void** data)
 
     s.frame.markers.push_back(std::move(marker));
 }
+// ---------------------------------------------------------------------------
+// Point clouds and oc-trees
+//
+// These are not part of the external renderer callback stream: the plugin walks
+// the scene through simLib-2 and reads the object properties directly.  Both
+// objects carry their geometry as packed buffers, and the pose they are drawn at
+// comes from simGetObjectPose().
+// ---------------------------------------------------------------------------
+
+std::vector<float> readFloatBuffer(SIMHANDLE objectHandle, const char* name)
+{
+    char* buffer = nullptr;
+    int length = 0;
+    if (simGetBufferProperty == nullptr ||
+        simGetBufferProperty(objectHandle, name, &buffer, &length) != sim_propertyret_ok ||
+        buffer == nullptr || length <= 0)
+    {
+        return {};
+    }
+
+    std::vector<float> values(static_cast<std::size_t>(length) / sizeof(float));
+    std::memcpy(values.data(), buffer, values.size() * sizeof(float));
+    simReleaseBuffer(buffer);
+    return values;
+}
+
+std::vector<unsigned char> readByteBuffer(SIMHANDLE objectHandle, const char* name)
+{
+    char* buffer = nullptr;
+    int length = 0;
+    if (simGetBufferProperty == nullptr ||
+        simGetBufferProperty(objectHandle, name, &buffer, &length) != sim_propertyret_ok ||
+        buffer == nullptr || length <= 0)
+    {
+        return {};
+    }
+
+    std::vector<unsigned char> values(static_cast<std::size_t>(length), 0);
+    std::memcpy(values.data(), buffer, values.size());
+    simReleaseBuffer(buffer);
+    return values;
+}
+
+// Objects are only drawn when their 'visible' property says so; when the
+// property cannot be read at all the object is kept, which is the safer
+// behaviour for a missing query.
+bool isObjectVisible(SIMHANDLE objectHandle)
+{
+    int visible = 1;
+    if (simGetBoolProperty == nullptr ||
+        simGetBoolProperty(objectHandle, "visible", &visible) != sim_propertyret_ok)
+    {
+        return true;
+    }
+    return visible != 0;
+}
+
+// Deterministic pseudo random colour, so the points do not flicker between
+// frames (no RNG state, just a hash of the index).
+Vec4 randomColor(std::size_t index)
+{
+    unsigned int hash = unsigned(index) * 2654435761u;
+    hash ^= hash >> 13;
+    hash *= 2246822519u;
+    hash ^= hash >> 16;
+    const float r = float((hash >> 0) & 0xFFu) / 255.0f;
+    const float g = float((hash >> 8) & 0xFFu) / 255.0f;
+    const float b = float((hash >> 16) & 0xFFu) / 255.0f;
+    return Vec4(0.25f + 0.75f * r, 0.25f + 0.75f * g, 0.25f + 0.75f * b, 1.0f);
+}
+
+// Fills a rgba byte array, either from the object's own colours or from the hash.
+void fillColors(std::vector<unsigned char>& colors, std::size_t count,
+                const std::vector<unsigned char>& source, bool random)
+{
+    if (!random && source.size() >= count * 4)
+    {
+        colors = source;
+        return;
+    }
+
+    colors.resize(count * 4);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        const Vec4 color = random ? randomColor(i) : Vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        colors[i * 4 + 0] = static_cast<unsigned char>(color.x() * 255.0f);
+        colors[i * 4 + 1] = static_cast<unsigned char>(color.y() * 255.0f);
+        colors[i * 4 + 2] = static_cast<unsigned char>(color.z() * 255.0f);
+        colors[i * 4 + 3] = static_cast<unsigned char>(color.w() * 255.0f);
+    }
+}
+
+// Fallback for oc-trees whose buffer property comes back empty: the same voxel
+// positions are exposed as a 3 x N matrix.
+std::vector<float> readPointsMatrix(SIMHANDLE objectHandle, const char* name)
+{
+    if (simGetMatrixProperty == nullptr)
+        return {};
+
+    double* values = nullptr;
+    int rows = 0;
+    int columns = 0;
+    if (simGetMatrixProperty(objectHandle, name, &values, &rows, &columns) != sim_propertyret_ok ||
+        values == nullptr || rows <= 0 || columns <= 0)
+    {
+        return {};
+    }
+
+    std::vector<float> positions;
+    positions.reserve(std::size_t(rows) * std::size_t(columns));
+    // Row major: three rows of `columns` coordinates.
+    for (int column = 0; column < columns; ++column)
+    {
+        for (int row = 0; row < rows; ++row)
+            positions.push_back(float(values[std::size_t(row) * std::size_t(columns) +
+                                             std::size_t(column)]));
+    }
+
+    simReleaseBuffer(values);
+    return positions;
+}
+Mat4 objectPoseMatrix(SIMHANDLE objectHandle)
+{
+    double pose[7] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};
+    if (simGetObjectPose != nullptr && simGetObjectPose(objectHandle, -1, pose) ==
+                                           sim_propertyret_ok)
+    {
+        const float position[3] = {float(pose[0]), float(pose[1]), float(pose[2])};
+        // pose holds (x, y, z, qx, qy, qz, qw); poseToMatrix takes (w, x, y, z).
+        const float quaternion[4] = {float(pose[6]), float(pose[3]), float(pose[4]),
+                                     float(pose[5])};
+        return poseToMatrix(quaternion, position);
+    }
+    return Mat4();
+}
+
+// Short description of where a transformed point set ended up, so a misplaced
+// object can be told apart from an undrawn one.
+std::string describeBounds(const std::vector<float>& localPositions, const Mat4& transform)
+{
+    if (localPositions.empty())
+        return "(no points)";
+
+    Vec3 minimum(localPositions[0], localPositions[1], localPositions[2]);
+    Vec3 maximum = minimum;
+    for (std::size_t i = 1; i * 3 + 2 < localPositions.size(); ++i)
+    {
+        minimum.setX(std::min(minimum.x(), localPositions[i * 3 + 0]));
+        minimum.setY(std::min(minimum.y(), localPositions[i * 3 + 1]));
+        minimum.setZ(std::min(minimum.z(), localPositions[i * 3 + 2]));
+        maximum.setX(std::max(maximum.x(), localPositions[i * 3 + 0]));
+        maximum.setY(std::max(maximum.y(), localPositions[i * 3 + 1]));
+        maximum.setZ(std::max(maximum.z(), localPositions[i * 3 + 2]));
+    }
+
+    // The centre of the local box, transformed: enough to see whether the object
+    // is where it should be.
+    const Vec3 centre = (minimum + maximum) * 0.5f;
+    const Vec4 world = transform * Vec4(centre, 1.0f);
+    char text[192];
+    std::snprintf(text, sizeof(text), "local %.3f..%.3f/%.3f..%.3f/%.3f..%.3f world (%.3f, %.3f, %.3f)",
+                  double(minimum.x()), double(maximum.x()), double(minimum.y()),
+                  double(maximum.y()), double(minimum.z()), double(maximum.z()), double(world.x()),
+                  double(world.y()), double(world.z()));
+    return std::string(text);
+}
+// Walks every point cloud and oc-tree of the scene.  Index based enumeration ends
+// at the first negative handle.
+void collectPointCloudsAndOctrees(FrameData& frame)
+{
+    frame.pointClouds.clear();
+    frame.octrees.clear();
+
+    // What the walk found, so an empty scene can be told apart from a rendering
+    // problem with a single line.
+    static bool reported = false;
+    std::size_t cloudCount = 0;
+    std::size_t cloudPoints = 0;
+    std::size_t octreeCount = 0;
+    std::size_t octreeVoxels = 0;
+    double firstCellSize = 0.0;
+    std::string firstCloudBounds;
+    std::string firstOctreeBounds;
+    float firstCloudPointSize = 0.0f;
+    int firstOctreeShowPoints = -1;
+
+    if (simGetObjects == nullptr)
+        return;
+
+    // Point clouds.
+    for (int index = 0; index < 100000; ++index)
+    {
+        const SIMHANDLE handle = simGetObjects(index, sim_sceneobject_pointcloud);
+        if (handle < 0)
+            break;
+        if (!isObjectVisible(handle))
+            continue;
+
+        PointCloudItem cloud;
+        cloud.handle = int(handle);
+        cloud.positions = readFloatBuffer(handle, "packedPoints");
+        if (cloud.positions.empty())
+            continue;
+
+        int pointSize = 1;
+        if (simGetIntProperty == nullptr ||
+            simGetIntProperty(handle, "pointSize", &pointSize) != sim_propertyret_ok)
+        {
+            pointSize = 1;
+        }
+        cloud.pointSize = float(std::max(pointSize, 1));
+
+        int random = 0;
+        if (simGetBoolProperty == nullptr ||
+            simGetBoolProperty(handle, "randomColors", &random) != sim_propertyret_ok)
+        {
+            random = 0;
+        }
+
+        fillColors(cloud.colors, cloud.positions.size() / 3, readByteBuffer(handle, "colors"),
+                   random != 0);
+        cloud.transform = objectPoseMatrix(handle);
+        ++cloudCount;
+        cloudPoints += cloud.positions.size() / 3;
+        if (firstCloudBounds.empty())
+        {
+            firstCloudBounds = describeBounds(cloud.positions, cloud.transform);
+            firstCloudPointSize = cloud.pointSize;
+        }
+        frame.pointClouds.push_back(std::move(cloud));
+    }
+
+    // Oc-trees: same payload, one cube of voxelSize per point.
+    for (int index = 0; index < 100000; ++index)
+    {
+        const SIMHANDLE handle = simGetObjects(index, sim_sceneobject_octree);
+        if (handle < 0)
+            break;
+        if (!isObjectVisible(handle))
+            continue;
+
+        OctreeItem octree;
+        octree.handle = int(handle);
+        octree.positions = readFloatBuffer(handle, "packedPoints");
+        if (octree.positions.empty())
+            octree.positions = readPointsMatrix(handle, "points");
+        if (octree.positions.empty())
+            continue;
+
+        double voxelSize = 0.05;
+        if (simGetFloatProperty == nullptr ||
+            simGetFloatProperty(handle, "voxelSize", &voxelSize) != sim_propertyret_ok)
+        {
+            voxelSize = 0.05;
+        }
+        octree.voxelSize = float(std::max(voxelSize, 1e-6));
+
+        int random = 0;
+        if (simGetBoolProperty == nullptr ||
+            simGetBoolProperty(handle, "randomColors", &random) != sim_propertyret_ok)
+        {
+            random = 0;
+        }
+
+        fillColors(octree.colors, octree.positions.size() / 3, readByteBuffer(handle, "colors"),
+                   random != 0);
+        octree.transform = objectPoseMatrix(handle);
+        ++octreeCount;
+        octreeVoxels += octree.positions.size() / 3;
+        if (firstCellSize == 0.0)
+        {
+            firstCellSize = voxelSize;
+            firstOctreeBounds = describeBounds(octree.positions, octree.transform);
+            int showPoints = 0;
+            if (simGetBoolProperty != nullptr &&
+                simGetBoolProperty(handle, "showPoints", &showPoints) == sim_propertyret_ok)
+            {
+                firstOctreeShowPoints = showPoints;
+            }
+        }
+        frame.octrees.push_back(std::move(octree));
+    }
+
+    if (!reported)
+    {
+        reported = true;
+        logMessage(sim_verbosity_warnings,
+                   "primitives: " + std::to_string(cloudCount) + " point cloud(s), " +
+                       std::to_string(cloudPoints) + " points, " + std::to_string(octreeCount) +
+                       " oc-tree(s), " + std::to_string(octreeVoxels) + " voxels, cell " +
+                       std::to_string(firstCellSize) + " m, showPoints " +
+                       std::to_string(firstOctreeShowPoints) + "; cloud pointSize " +
+                       std::to_string(firstCloudPointSize) + " " + firstCloudBounds +
+                       "; oc-tree " + firstOctreeBounds);
+    }
+}
 void handleStop(void** data)
 {
     RendererState& s = state();
@@ -805,6 +1103,10 @@ void handleStop(void** data)
 
     if (s.renderer != nullptr && s.renderer->isReady())
     {
+        // Point clouds and oc-trees are fetched here, right after the shapes have
+        // been submitted through the callbacks.
+        collectPointCloudsAndOctrees(s.frame);
+
         s.renderer->renderFrame(*s.context.functions(), *s.activeTarget, s.frame, rgbBuffer,
                                 depthBuffer, readRgb, readDepth);
 
@@ -818,6 +1120,8 @@ void handleStop(void** data)
     s.activeHandle = -1;
     s.frame.items.clear();
     s.frame.lights.clear();
+    s.frame.pointClouds.clear();
+    s.frame.octrees.clear();
     ++s.frameIndex;
 }
 

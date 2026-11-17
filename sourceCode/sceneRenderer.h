@@ -87,12 +87,39 @@ struct MarkerItem
     bool isNotShaded() const { return (options & markerOptionNotShaded) != 0; }
 };
 
+// A point cloud as the engine reports it: positions in the object's frame and an
+// optional rgba colour per point.
+struct PointCloudItem
+{
+    std::vector<float> positions;      // 3 floats per point
+    std::vector<unsigned char> colors; // 4 bytes per point, empty when unset
+    float pointSize = 1.0f;            // pixels
+    Mat4 transform;                    // object pose
+    int handle = 0;
+};
+
+// An oc-tree as the engine reports it: one cube of `voxelSize` per point, in the
+// object's frame.
+struct OctreeItem
+{
+    std::vector<float> positions;      // 3 floats per voxel centre
+    std::vector<unsigned char> colors; // 4 bytes per voxel, empty when unset
+    float voxelSize = 0.05f;
+    Mat4 transform; // object pose
+    int handle = 0;
+};
+
 struct FrameData
 {
     CameraData camera;
     std::vector<LightShadowInfo> lights;
     std::vector<DrawItem> items;
     std::vector<MarkerItem> markers;
+
+    // Point clouds and oc-trees: fetched from the engine by the plugin, drawn
+    // after the shapes and before the markers.
+    std::vector<PointCloudItem> pointClouds;
+    std::vector<OctreeItem> octrees;
 };
 
 class SceneRenderer
@@ -196,6 +223,8 @@ private:
     // tubes and the instanced primitives, split into a normal and an overlay
     // batch (overlay markers ignore the depth buffer).
     void renderMarkers(GLFuncs& gl, const FrameData& frame);
+    // Point clouds and oc-tree voxels: unlit, drawn after the shapes.
+    void renderPointsAndVoxels(GLFuncs& gl, const FrameData& frame);
 
     // Drops geometry and textures that have not been referenced for a while, so
     // deleted objects (and objects whose identity the engine regenerates) cannot
@@ -231,6 +260,14 @@ private:
     GpuProgram m_tonemapProgram;
     GpuProgram m_markerProgram;
     GpuProgram m_colorCodeProgram;
+    GpuProgram m_pointProgram;
+    GpuProgram m_voxelProgram;
+    GpuBuffer m_pointBuffer; // interleaved position + colour
+    GpuBuffer m_voxelBuffer; // per instance: centre, size, colour
+    GLuint m_voxelVertexArray = 0;
+    GLuint m_pointVertexArray = 0;
+    GpuBuffer m_voxelVertexBuffer; // unit cube
+    GLsizei m_voxelVertexCount = 0;
     GLuint m_emptyVao = 0;
 
     // Cached uniform locations, resolved once after linking.  A location is
@@ -253,6 +290,9 @@ private:
     int m_uGamma = -1;
     int m_uColorCodeViewProjection = -1;
     int m_uColorCodeClipPlanes = -1;
+    int m_uPointModel = -1;
+    int m_uPointSize = -1;
+    int m_uVoxelModel = -1;
     int m_uMarkerLit = -1;
 
     GpuBuffer m_cameraBuffer;

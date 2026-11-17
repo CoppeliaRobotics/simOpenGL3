@@ -70,6 +70,7 @@ typedef char GLchar;
 #endif
 #ifndef GL_RGBA16F
 #define GL_RGBA16F 0x881A
+#define GL_PROGRAM_POINT_SIZE 0x8642 // GL 3.2; the 1.1 headers do not have it
 #endif
 #ifndef GL_RGBA8
 #define GL_RGBA8 0x8058
@@ -242,6 +243,7 @@ typedef void(GLAPIENTRY* PFN_glDeleteVertexArrays)(GLsizei, const GLuint*);
 typedef void(GLAPIENTRY* PFN_glDepthFunc)(GLenum);
 typedef void(GLAPIENTRY* PFN_glDepthMask)(GLboolean);
 typedef void(GLAPIENTRY* PFN_glDisable)(GLenum);
+typedef void(GLAPIENTRY* PFN_glDisableVertexAttribArray)(GLuint);
 typedef void(GLAPIENTRY* PFN_glDrawArrays)(GLenum, GLint, GLsizei);
 typedef void(GLAPIENTRY* PFN_glDrawArraysInstanced)(GLenum, GLint, GLsizei, GLsizei);
 typedef void(GLAPIENTRY* PFN_glDrawBuffers)(GLsizei, const GLenum*);
@@ -327,6 +329,7 @@ typedef void(GLAPIENTRY* PFN_glPointSize)(GLfloat);
     X(DepthFunc)               \
     X(DepthMask)               \
     X(Disable)                 \
+    X(DisableVertexAttribArray) \
     X(DrawArrays)              \
     X(DrawArraysInstanced)     \
     X(DrawBuffers)             \

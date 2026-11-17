@@ -885,5 +885,406 @@ void main()
 
 )GLSL";
 
+inline const char* const kPointsVert = R"GLSL(#version 330 core
+
+// Point clouds from the engine, drawn as GL_POINTS.  Points are unlit: the
+// colour is whatever the object carries (or the handle in a colour coded frame).
+//
+// The camera block is used rather than a plain uniform because the fragment
+// stage needs the clip planes to write the same linear depth the shaded pass
+// writes - otherwise the depth test compares two different ranges and the points
+// disappear behind everything.
+
+// ===========================================================================
+// Common declarations shared by the forward shading pass.
+//
+// This file is pulled in with #include and must therefore NOT contain a
+// #version directive: the including shader has to keep that on its first line.
+//
+// The uniform block indices are assigned from C++ with glUniformBlockBinding()
+// because "layout(binding = ...)" on a uniform block needs GLSL 4.20, while
+// this renderer targets 3.30.
+// ===========================================================================
+
+layout(std140) uniform CameraBlock
+{
+    mat4 uView;
+    mat4 uProjection;
+    mat4 uViewProjection;
+
+    vec4 uViewPosition;  // xyz eye position
+    vec4 uSceneAmbient;  // rgb linear scene ambient
+    vec4 uFogColor;      // rgb linear fog colour
+    vec4 uFogParams;     // x type, y start, z end/density, w enabled
+    vec4 uClipPlanes;    // x near, y far
+};
+
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
+struct GpuLight
+{
+    vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
+    vec4 directionRange; // xyz spot/dir axis,  w shadow far plane
+    vec4 colorIntensity; // rgb linear colour,  w cos(inner cone)
+    vec4 attenuation;    // x const, y linear, z quadratic, w cos(outer cone)
+    vec4 shadow;         // x first layer, y depth bias, z normal bias, w shadow near
+    vec4 specularColor;  // rgb light specular
+    mat4 lightSpace;     // world -> light clip space (directional and spot only)
+};
+
+layout(std140) uniform LightBlock
+{
+    vec4 uLightHeader; // x = light count, y = shadows available
+    GpuLight uLights[32];
+};
+
+const int LIGHT_OMNI = 1;
+const int LIGHT_SPOT = 2;
+const int LIGHT_DIR = 3;
+
+
+
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec4 aColor;
+
+uniform mat4 uModel;
+uniform float uPointSize;
+
+
+out vec4 vColor;
+
+void main()
+{
+    vColor = aColor;
+    gl_PointSize = uPointSize;
+    gl_Position = uViewProjection * (uModel * vec4(aPosition, 1.0));
+}
+
+)GLSL";
+
+inline const char* const kPointsFrag = R"GLSL(#version 330 core
+
+// ===========================================================================
+// Common declarations shared by the forward shading pass.
+//
+// This file is pulled in with #include and must therefore NOT contain a
+// #version directive: the including shader has to keep that on its first line.
+//
+// The uniform block indices are assigned from C++ with glUniformBlockBinding()
+// because "layout(binding = ...)" on a uniform block needs GLSL 4.20, while
+// this renderer targets 3.30.
+// ===========================================================================
+
+layout(std140) uniform CameraBlock
+{
+    mat4 uView;
+    mat4 uProjection;
+    mat4 uViewProjection;
+
+    vec4 uViewPosition;  // xyz eye position
+    vec4 uSceneAmbient;  // rgb linear scene ambient
+    vec4 uFogColor;      // rgb linear fog colour
+    vec4 uFogParams;     // x type, y start, z end/density, w enabled
+    vec4 uClipPlanes;    // x near, y far
+};
+
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
+struct GpuLight
+{
+    vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
+    vec4 directionRange; // xyz spot/dir axis,  w shadow far plane
+    vec4 colorIntensity; // rgb linear colour,  w cos(inner cone)
+    vec4 attenuation;    // x const, y linear, z quadratic, w cos(outer cone)
+    vec4 shadow;         // x first layer, y depth bias, z normal bias, w shadow near
+    vec4 specularColor;  // rgb light specular
+    mat4 lightSpace;     // world -> light clip space (directional and spot only)
+};
+
+layout(std140) uniform LightBlock
+{
+    vec4 uLightHeader; // x = light count, y = shadows available
+    GpuLight uLights[32];
+};
+
+const int LIGHT_OMNI = 1;
+const int LIGHT_SPOT = 2;
+const int LIGHT_DIR = 3;
+
+
+
+in vec4 vColor;
+
+out vec4 FragColor;
+
+void main()
+{
+    // Same depth encoding as the shaded pass and the markers.
+    gl_FragDepth = lineariseWindowDepth(gl_FragCoord.z);
+    FragColor = vColor;
+}
+)GLSL";
+
+inline const char* const kVoxelsVert = R"GLSL(#version 330 core
+
+// Oc-tree voxels: one instanced cube per point.  The cube is a unit cube in the
+// object's frame, scaled by the voxel size, so an instance carries the centre,
+// the edge length, the colour and whether it is lit.
+
+// ===========================================================================
+// Common declarations shared by the forward shading pass.
+//
+// This file is pulled in with #include and must therefore NOT contain a
+// #version directive: the including shader has to keep that on its first line.
+//
+// The uniform block indices are assigned from C++ with glUniformBlockBinding()
+// because "layout(binding = ...)" on a uniform block needs GLSL 4.20, while
+// this renderer targets 3.30.
+// ===========================================================================
+
+layout(std140) uniform CameraBlock
+{
+    mat4 uView;
+    mat4 uProjection;
+    mat4 uViewProjection;
+
+    vec4 uViewPosition;  // xyz eye position
+    vec4 uSceneAmbient;  // rgb linear scene ambient
+    vec4 uFogColor;      // rgb linear fog colour
+    vec4 uFogParams;     // x type, y start, z end/density, w enabled
+    vec4 uClipPlanes;    // x near, y far
+};
+
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
+struct GpuLight
+{
+    vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
+    vec4 directionRange; // xyz spot/dir axis,  w shadow far plane
+    vec4 colorIntensity; // rgb linear colour,  w cos(inner cone)
+    vec4 attenuation;    // x const, y linear, z quadratic, w cos(outer cone)
+    vec4 shadow;         // x first layer, y depth bias, z normal bias, w shadow near
+    vec4 specularColor;  // rgb light specular
+    mat4 lightSpace;     // world -> light clip space (directional and spot only)
+};
+
+layout(std140) uniform LightBlock
+{
+    vec4 uLightHeader; // x = light count, y = shadows available
+    GpuLight uLights[32];
+};
+
+const int LIGHT_OMNI = 1;
+const int LIGHT_SPOT = 2;
+const int LIGHT_DIR = 3;
+
+
+
+layout(location = 0) in vec3 aPosition; // unit cube, -0.5 .. 0.5
+layout(location = 4) in vec3 aNormal;   // unit cube face normal
+
+layout(location = 1) in vec3 aCenter;
+layout(location = 2) in float aSize;
+layout(location = 3) in vec4 aColor;
+layout(location = 5) in float aLit;
+
+uniform mat4 uModel;
+
+out vec4 vColor;
+out vec3 vNormal;
+out vec3 vWorldPosition;
+out float vLit;
+
+void main()
+{
+    vColor = aColor;
+    vLit = aLit;
+
+    vec3 local = aCenter + aPosition * aSize;
+    vec4 world = uModel * vec4(local, 1.0);
+
+    vWorldPosition = world.xyz;
+    // Objects are placed rigidly (scaling lives in voxelSize), so the model
+    // matrix rotates normals without distorting them.
+    vNormal = mat3(uModel) * aNormal;
+
+    gl_Position = uViewProjection * world;
+}
+)GLSL";
+
+inline const char* const kVoxelsFrag = R"GLSL(#version 330 core
+
+// Oc-tree voxels are lit like the rest of the scene - diffuse only, with the
+// scene ambient term - and write the same linear depth as the shaded pass.
+
+// ===========================================================================
+// Common declarations shared by the forward shading pass.
+//
+// This file is pulled in with #include and must therefore NOT contain a
+// #version directive: the including shader has to keep that on its first line.
+//
+// The uniform block indices are assigned from C++ with glUniformBlockBinding()
+// because "layout(binding = ...)" on a uniform block needs GLSL 4.20, while
+// this renderer targets 3.30.
+// ===========================================================================
+
+layout(std140) uniform CameraBlock
+{
+    mat4 uView;
+    mat4 uProjection;
+    mat4 uViewProjection;
+
+    vec4 uViewPosition;  // xyz eye position
+    vec4 uSceneAmbient;  // rgb linear scene ambient
+    vec4 uFogColor;      // rgb linear fog colour
+    vec4 uFogParams;     // x type, y start, z end/density, w enabled
+    vec4 uClipPlanes;    // x near, y far
+};
+
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
+struct GpuLight
+{
+    vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
+    vec4 directionRange; // xyz spot/dir axis,  w shadow far plane
+    vec4 colorIntensity; // rgb linear colour,  w cos(inner cone)
+    vec4 attenuation;    // x const, y linear, z quadratic, w cos(outer cone)
+    vec4 shadow;         // x first layer, y depth bias, z normal bias, w shadow near
+    vec4 specularColor;  // rgb light specular
+    mat4 lightSpace;     // world -> light clip space (directional and spot only)
+};
+
+layout(std140) uniform LightBlock
+{
+    vec4 uLightHeader; // x = light count, y = shadows available
+    GpuLight uLights[32];
+};
+
+const int LIGHT_OMNI = 1;
+const int LIGHT_SPOT = 2;
+const int LIGHT_DIR = 3;
+
+
+
+in vec4 vColor;
+in vec3 vNormal;
+in vec3 vWorldPosition;
+
+// 0 in a colour coded frame: the handle colour must reach the image untouched.
+in float vLit;
+
+out vec4 FragColor;
+
+void main()
+{
+    vec3 normal = normalize(vNormal);
+    vec3 lighting = uSceneAmbient.rgb;
+
+    int lightCount = int(uLightHeader.x);
+    for (int i = 0; i < lightCount; ++i)
+    {
+        GpuLight light = uLights[i];
+        int type = int(light.positionKind.w);
+
+        vec3 lightDirection;
+        float attenuation = 1.0;
+
+        if (type == LIGHT_DIR)
+        {
+            lightDirection = normalize(-light.directionRange.xyz);
+        }
+        else
+        {
+            vec3 toLight = light.positionKind.xyz - vWorldPosition;
+            float distance = length(toLight);
+            lightDirection = toLight / max(distance, 1e-5);
+
+            float denominator = light.attenuation.x +
+                                light.attenuation.y * distance +
+                                light.attenuation.z * distance * distance;
+            attenuation = 1.0 / max(denominator, 1e-5);
+
+            if (type == LIGHT_SPOT)
+            {
+                float theta = dot(lightDirection, normalize(-light.directionRange.xyz));
+                float epsilon = max(light.colorIntensity.w - light.attenuation.w, 1e-4);
+                attenuation *= clamp((theta - light.attenuation.w) / epsilon, 0.0, 1.0);
+            }
+        }
+
+        lighting += light.colorIntensity.rgb * max(dot(normal, lightDirection), 0.0) * attenuation;
+    }
+
+    gl_FragDepth = lineariseWindowDepth(gl_FragCoord.z);
+    FragColor = vec4(vColor.rgb * mix(vec3(1.0), lighting, vLit), vColor.a);
+}
+
+
+)GLSL";
+
 } // namespace shaders
 } // namespace modern

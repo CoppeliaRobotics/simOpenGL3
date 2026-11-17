@@ -101,6 +101,10 @@ DISTFILES += \
     resources/shaders/marker.frag \
     resources/shaders/colorcode.vert \
     resources/shaders/colorcode.frag \
+    resources/shaders/points.vert \
+    resources/shaders/points.frag \
+    resources/shaders/voxels.vert \
+    resources/shaders/voxels.frag \
     lua/simOpenGL3.lua \
 
 unix:!symbian {

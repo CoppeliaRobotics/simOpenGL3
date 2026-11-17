@@ -1,4 +1,6 @@
 #include "sceneRenderer.h"
+
+#include <cstdio>
 #include "shaders_embedded.h"
 
 #include "log.h"
@@ -66,6 +68,36 @@ bool SceneRenderer::Frustum::intersects(const Vec3& center, float radius) const
 // Setup
 // ---------------------------------------------------------------------------
 
+// Unit cube for the oc-tree voxels: 12 triangles, counter clockwise seen from
+// outside, spanning -0.5 .. 0.5 so an instance only adds centre and edge length.
+// Interleaved position + normal, six floats per vertex.
+const float kVoxelCubeVertices[] = {
+    // +X
+    0.5f, -0.5f, -0.5f, 1.0f, 0.0f, 0.0f, 0.5f, 0.5f, -0.5f, 1.0f, 0.0f, 0.0f,
+    0.5f, 0.5f, 0.5f, 1.0f, 0.0f, 0.0f, 0.5f, -0.5f, -0.5f, 1.0f, 0.0f, 0.0f,
+    0.5f, 0.5f, 0.5f, 1.0f, 0.0f, 0.0f, 0.5f, -0.5f, 0.5f, 1.0f, 0.0f, 0.0f,
+    // -X
+    -0.5f, -0.5f, 0.5f, -1.0f, 0.0f, 0.0f, -0.5f, 0.5f, 0.5f, -1.0f, 0.0f, 0.0f,
+    -0.5f, 0.5f, -0.5f, -1.0f, 0.0f, 0.0f, -0.5f, -0.5f, 0.5f, -1.0f, 0.0f, 0.0f,
+    -0.5f, 0.5f, -0.5f, -1.0f, 0.0f, 0.0f, -0.5f, -0.5f, -0.5f, -1.0f, 0.0f, 0.0f,
+    // +Y
+    -0.5f, 0.5f, -0.5f, 0.0f, 1.0f, 0.0f, -0.5f, 0.5f, 0.5f, 0.0f, 1.0f, 0.0f,
+    0.5f, 0.5f, 0.5f, 0.0f, 1.0f, 0.0f, -0.5f, 0.5f, -0.5f, 0.0f, 1.0f, 0.0f,
+    0.5f, 0.5f, 0.5f, 0.0f, 1.0f, 0.0f, 0.5f, 0.5f, -0.5f, 0.0f, 1.0f, 0.0f,
+    // -Y
+    -0.5f, -0.5f, 0.5f, 0.0f, -1.0f, 0.0f, -0.5f, -0.5f, -0.5f, 0.0f, -1.0f, 0.0f,
+    0.5f, -0.5f, -0.5f, 0.0f, -1.0f, 0.0f, -0.5f, -0.5f, 0.5f, 0.0f, -1.0f, 0.0f,
+    0.5f, -0.5f, -0.5f, 0.0f, -1.0f, 0.0f, 0.5f, -0.5f, 0.5f, 0.0f, -1.0f, 0.0f,
+    // +Z
+    -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f,
+    0.5f, 0.5f, 0.5f, 0.0f, 0.0f, 1.0f, -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f,
+    0.5f, 0.5f, 0.5f, 0.0f, 0.0f, 1.0f, -0.5f, 0.5f, 0.5f, 0.0f, 0.0f, 1.0f,
+    // -Z
+    0.5f, -0.5f, -0.5f, 0.0f, 0.0f, -1.0f, -0.5f, -0.5f, -0.5f, 0.0f, 0.0f, -1.0f,
+    -0.5f, 0.5f, -0.5f, 0.0f, 0.0f, -1.0f, 0.5f, -0.5f, -0.5f, 0.0f, 0.0f, -1.0f,
+    -0.5f, 0.5f, -0.5f, 0.0f, 0.0f, -1.0f, 0.5f, 0.5f, -0.5f, 0.0f, 0.0f, -1.0f,
+};
+
 bool SceneRenderer::initialize(GLFuncs& gl, const RenderSettings& settings)
 {
     m_settings = settings;
@@ -89,6 +121,44 @@ bool SceneRenderer::initialize(GLFuncs& gl, const RenderSettings& settings)
     m_colorCodeProgram.use(gl);
     m_uColorCodeViewProjection = m_colorCodeProgram.location(gl, "uViewProjection");
     m_uColorCodeClipPlanes = m_colorCodeProgram.location(gl, "uClipPlanes");
+
+    if (!m_pointProgram.build(gl, shaders::kPointsVert, shaders::kPointsFrag, "points"))
+        return false;
+    m_pointProgram.use(gl);
+    m_pointProgram.bindUniformBlock(gl, "CameraBlock", kBlockCamera);
+    m_uPointModel = m_pointProgram.location(gl, "uModel");
+    m_uPointSize = m_pointProgram.location(gl, "uPointSize");
+
+    // The voxels are lit, so they need the lights as well, and their depth must
+    // match the shaded pass (both use the camera block's clip planes).
+    if (!m_voxelProgram.build(gl, shaders::kVoxelsVert, shaders::kVoxelsFrag, "voxels"))
+        return false;
+    m_voxelProgram.use(gl);
+    m_voxelProgram.bindUniformBlock(gl, "CameraBlock", kBlockCamera);
+    m_voxelProgram.bindUniformBlock(gl, "LightBlock", kBlockLights);
+    m_uVoxelModel = m_voxelProgram.location(gl, "uModel");
+
+    // Unit cube for the voxels, once.
+    m_voxelVertexBuffer.create(gl);
+    m_voxelVertexBuffer.uploadStreaming(gl, GL_ARRAY_BUFFER, GLsizeiptr(sizeof(kVoxelCubeVertices)),
+                                       kVoxelCubeVertices);
+    m_voxelVertexCount = GLsizei(sizeof(kVoxelCubeVertices) / (6 * sizeof(float)));
+ 
+    // The point pass needs its own vertex array object: a core profile does not
+    // allow drawing into the default one.
+    gl.glGenVertexArrays(1, &m_pointVertexArray);
+ 
+    gl.glGenVertexArrays(1, &m_voxelVertexArray);
+    gl.glBindVertexArray(m_voxelVertexArray);
+    gl.glBindBuffer(GL_ARRAY_BUFFER, m_voxelVertexBuffer.id());
+    // Interleaved position + normal, six floats per vertex.
+    gl.glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                             reinterpret_cast<const void*>(0));
+    gl.glEnableVertexAttribArray(0);
+    gl.glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                             reinterpret_cast<const void*>(3 * sizeof(float)));
+    gl.glEnableVertexAttribArray(4);
+    gl.glBindVertexArray(0);
 
     m_markerProgram.use(gl);
     m_markerProgram.bindUniformBlock(gl, "CameraBlock", kBlockCamera);
@@ -199,6 +269,15 @@ void SceneRenderer::shutdown(GLFuncs& gl)
     m_tonemapProgram.destroy(gl);
     m_markerProgram.destroy(gl);
     m_colorCodeProgram.destroy(gl);
+    m_pointProgram.destroy(gl);
+    m_voxelProgram.destroy(gl);
+    m_pointBuffer.destroy(gl);
+    m_voxelBuffer.destroy(gl);
+    m_voxelVertexBuffer.destroy(gl);
+    if (m_voxelVertexArray != 0)
+        gl.glDeleteVertexArrays(1, &m_voxelVertexArray);
+    if (m_pointVertexArray != 0)
+        gl.glDeleteVertexArrays(1, &m_pointVertexArray);
     m_markerBuffer.destroy(gl);
     if (m_markerVao != 0)
     {
@@ -469,6 +548,10 @@ void SceneRenderer::updateCameraBlock(GLFuncs& gl, const CameraData& camera)
                             0.0f);
 
     m_cameraBuffer.upload(gl, GL_UNIFORM_BUFFER, 0, sizeof(GpuCamera), &block);
+    // Re-bind every frame: the binding points are global state, and anything else
+    // that renders with the same block indices (another renderer instance, or the
+    // host application) would otherwise leave this one reading a stale buffer.
+    m_cameraBuffer.bindBase(gl, GL_UNIFORM_BUFFER, kBlockCamera);
 }
 
 bool SceneRenderer::updateLightBlock(GLFuncs& gl, FrameData& frame)
@@ -601,6 +684,7 @@ bool SceneRenderer::updateLightBlock(GLFuncs& gl, FrameData& frame)
                     m_gpuLights.size() * sizeof(GpuLight));
     }
     m_lightBuffer.upload(gl, GL_UNIFORM_BUFFER, 0, GLsizeiptr(staging.size()), staging.data());
+    m_lightBuffer.bindBase(gl, GL_UNIFORM_BUFFER, kBlockLights);
 
     return shadowsAvailable;
 }
@@ -1068,6 +1152,10 @@ void SceneRenderer::renderTonemap(GLFuncs& gl, OffscreenTarget& target)
 namespace
 {
 
+namespace
+{
+
+} // namespace
 Mat4 markerTransform(const Mat4& frame, const float* quaternion, const float* sizes)
 {
     // translate(position) * rotate(quaternion) * scale(sizes)
@@ -1090,6 +1178,219 @@ Mat4 markerTransform(const Mat4& frame, const float* quaternion, const float* si
 }
 
 } // namespace
+namespace
+{
+
+// Colour of an object handle in a colour coded frame: (h & 255, h >> 8 & 255,
+// h >> 16 & 255) / 255, the same encoding the meshes and markers use.
+Vec4 handleColorValue(int handle)
+{
+    const unsigned int bits = static_cast<unsigned int>(handle);
+    return Vec4(float(bits & 0xFFu) / 255.0f, float((bits >> 8) & 0xFFu) / 255.0f,
+                float((bits >> 16) & 0xFFu) / 255.0f, 1.0f);
+}
+
+} // namespace
+
+void SceneRenderer::renderPointsAndVoxels(GLFuncs& gl, const FrameData& frame)
+{
+    if (frame.pointClouds.empty() && frame.octrees.empty())
+        return;
+
+    const bool colorCoded = frame.camera.colorCoded;
+    const bool gamma = m_settings.gammaCorrect; // authored colours are sRGB
+
+
+    gl.glEnable(GL_DEPTH_TEST);
+    gl.glDepthFunc(GL_LEQUAL);
+    gl.glDepthMask(GL_TRUE);
+    gl.glDisable(GL_BLEND);
+    gl.glDisable(GL_CULL_FACE);
+
+    const auto colorOf = [&](const unsigned char* rgba, std::size_t index, const Vec4& fallback) {
+        if (rgba == nullptr)
+            return fallback;
+        const unsigned char* c = rgba + index * 4;
+        Vec3 rgb(float(c[0]) / 255.0f, float(c[1]) / 255.0f, float(c[2]) / 255.0f);
+        if (gamma)
+            rgb = linearFromSrgb(rgb);
+        return Vec4(rgb, float(c[3]) / 255.0f);
+    };
+
+    // ---- points ----------------------------------------------------------
+    if (!frame.pointClouds.empty())
+    {
+        std::vector<float> vertices; // position(3) + colour(4)
+        std::size_t total = 0;
+        for (const PointCloudItem& cloud : frame.pointClouds)
+            total += cloud.positions.size() / 3;
+        vertices.reserve(total * 7);
+
+        struct Range
+        {
+            std::size_t first;
+            std::size_t count;
+            float pointSize;
+            Mat4 model;
+        };
+        std::vector<Range> ranges;
+
+        std::size_t first = 0;
+        for (const PointCloudItem& cloud : frame.pointClouds)
+        {
+            const std::size_t count = cloud.positions.size() / 3;
+            if (count == 0)
+                continue;
+
+            const unsigned char* colors =
+                cloud.colors.size() >= count * 4 ? cloud.colors.data() : nullptr;
+            const Vec4 codedColor = handleColorValue(cloud.handle);
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                vertices.push_back(cloud.positions[i * 3 + 0]);
+                vertices.push_back(cloud.positions[i * 3 + 1]);
+                vertices.push_back(cloud.positions[i * 3 + 2]);
+
+                const Vec4 color =
+                    colorCoded ? codedColor : colorOf(colors, i, Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+                vertices.push_back(color.x());
+                vertices.push_back(color.y());
+                vertices.push_back(color.z());
+                vertices.push_back(color.w());
+            }
+
+            ranges.push_back(Range{first, count, cloud.pointSize, cloud.transform});
+            first += count;
+        }
+
+        if (!vertices.empty())
+        {
+            // uploadStreaming() grows the buffer when needed *and* fills it, so
+            // the first frame is uploaded too (allocating alone leaves it
+            // undefined).
+            m_pointBuffer.uploadStreaming(gl, GL_ARRAY_BUFFER,
+                                          GLsizeiptr(vertices.size() * sizeof(float)),
+                                          vertices.data());
+
+            gl.glBindVertexArray(m_pointVertexArray);
+            m_pointBuffer.bind(gl, GL_ARRAY_BUFFER);
+            gl.glEnableVertexAttribArray(0);
+            gl.glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float),
+                                     reinterpret_cast<const void*>(0));
+            gl.glEnableVertexAttribArray(1);
+            gl.glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7 * sizeof(float),
+                                     reinterpret_cast<const void*>(3 * sizeof(float)));
+
+            m_pointProgram.use(gl);
+            gl.glEnable(GL_PROGRAM_POINT_SIZE);
+
+            for (const Range& range : ranges)
+            {
+                m_pointProgram.set(gl, m_uPointModel, range.model);
+                m_pointProgram.set(gl, m_uPointSize, std::max(range.pointSize, 1.0f));
+                gl.glDrawArrays(GL_POINTS, GLint(range.first), GLsizei(range.count));
+            }
+
+            gl.glDisableVertexAttribArray(0);
+            gl.glDisableVertexAttribArray(1);
+            gl.glBindVertexArray(0);
+            ++m_statistics.drawCalls;
+        }
+    }
+
+    // ---- voxels ----------------------------------------------------------
+    if (!frame.octrees.empty() && m_voxelVertexCount > 0)
+    {
+        std::vector<float> instances; // centre(3) + size(1) + colour(4)
+        struct Range
+        {
+            std::size_t first;
+            std::size_t count;
+            Mat4 model;
+        };
+        std::vector<Range> ranges;
+
+        std::size_t first = 0;
+        for (const OctreeItem& octree : frame.octrees)
+        {
+            const std::size_t count = octree.positions.size() / 3;
+            if (count == 0)
+                continue;
+
+            const unsigned char* colors =
+                octree.colors.size() >= count * 4 ? octree.colors.data() : nullptr;
+            const float size = std::max(octree.voxelSize, 1e-6f);
+            const Vec4 codedColor = handleColorValue(octree.handle);
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                instances.push_back(octree.positions[i * 3 + 0]);
+                instances.push_back(octree.positions[i * 3 + 1]);
+                instances.push_back(octree.positions[i * 3 + 2]);
+                instances.push_back(size);
+
+                const Vec4 color =
+                    colorCoded ? codedColor : colorOf(colors, i, Vec4(1.0f, 1.0f, 1.0f, 1.0f));
+                instances.push_back(color.x());
+                instances.push_back(color.y());
+                instances.push_back(color.z());
+                instances.push_back(color.w());
+                instances.push_back(colorCoded ? 0.0f : 1.0f); // lit
+            }
+
+            ranges.push_back(Range{first, count, octree.transform});
+            first += count;
+        }
+
+        if (!instances.empty())
+        {
+            m_voxelBuffer.uploadStreaming(gl, GL_ARRAY_BUFFER,
+                                          GLsizeiptr(instances.size() * sizeof(float)),
+                                          instances.data());
+
+            gl.glBindVertexArray(m_voxelVertexArray);
+            m_voxelBuffer.bind(gl, GL_ARRAY_BUFFER);
+            const GLsizei stride = 9 * GLsizei(sizeof(float));
+            gl.glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
+                                     reinterpret_cast<const void*>(0));
+            gl.glVertexAttribDivisor(1, 1);
+            gl.glEnableVertexAttribArray(1);
+            gl.glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride,
+                                     reinterpret_cast<const void*>(3 * sizeof(float)));
+            gl.glVertexAttribDivisor(2, 1);
+            gl.glEnableVertexAttribArray(2);
+            gl.glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride,
+                                     reinterpret_cast<const void*>(4 * sizeof(float)));
+            gl.glVertexAttribDivisor(3, 1);
+            gl.glEnableVertexAttribArray(3);
+            gl.glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride,
+                                     reinterpret_cast<const void*>(8 * sizeof(float)));
+            gl.glVertexAttribDivisor(5, 1);
+            gl.glEnableVertexAttribArray(5);
+
+            m_voxelProgram.use(gl);
+
+
+            for (const Range& range : ranges)
+            {
+                m_voxelProgram.set(gl, m_uVoxelModel, range.model);
+                gl.glDrawArraysInstanced(GL_TRIANGLES, 0, m_voxelVertexCount, GLsizei(range.count));
+            }
+
+            gl.glVertexAttribDivisor(1, 0);
+            gl.glVertexAttribDivisor(2, 0);
+            gl.glVertexAttribDivisor(3, 0);
+            gl.glVertexAttribDivisor(5, 0);
+            gl.glDisableVertexAttribArray(1);
+            gl.glDisableVertexAttribArray(2);
+            gl.glDisableVertexAttribArray(3);
+            gl.glDisableVertexAttribArray(5);
+            gl.glBindVertexArray(0);
+            ++m_statistics.drawCalls;
+        }
+    }
+
+    gl.glDisable(GL_PROGRAM_POINT_SIZE);
+}
 void SceneRenderer::renderMarkers(GLFuncs& gl, const FrameData& frame)
 {
     m_markerPoints.clear();
@@ -1654,6 +1955,10 @@ void SceneRenderer::renderFrame(GLFuncs& gl, OffscreenTarget& target, FrameData&
         drawRuns(gl, m_opaqueRuns, false);
         drawRuns(gl, m_translucentRuns, false);
 
+        // Point clouds and oc-trees come from the engine and carry their own
+        // object handle, so they are colour coded like the meshes.
+        renderPointsAndVoxels(gl, frame);
+
         renderMarkers(gl, frame);
 
         target.resolve(gl);
@@ -1682,6 +1987,10 @@ void SceneRenderer::renderFrame(GLFuncs& gl, OffscreenTarget& target, FrameData&
 
     renderOpaque(gl);
     renderTranslucent(gl);
+
+    // Point clouds and oc-trees are scene content: they are drawn right after
+    // the shapes and before the markers.
+    renderPointsAndVoxels(gl, frame);
 
     // Markers go last, into the multisampled target like everything else, so
     // overlay markers are drawn on top of the resolved scene.

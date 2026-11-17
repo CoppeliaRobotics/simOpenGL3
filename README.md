@@ -162,6 +162,47 @@ them:
 
 ---
 
+## Point clouds and oc-trees
+
+Neither object type is part of the external renderer callback stream, so the
+plugin walks the scene through simLib-2 right after the shapes have been
+submitted:
+
+```
+simGetObjects(index, sim_sceneobject_pointcloud)   index from 0, < 0 ends the walk
+simGetObjects(index, sim_sceneobject_octree)
+simGetBoolProperty (handle, "visible", ...)         skip the object when false
+simGetBufferProperty(handle, "packedPoints", ...)   float triples
+simGetBufferProperty(handle, "colors", ...)         rgba bytes, optional
+simGetIntProperty   (handle, "pointSize", ...)      point clouds: pixels
+simGetFloatProperty (handle, "voxelSize", ...)      oc-trees: edge length
+simGetBoolProperty  (handle, "randomColors", ...)   hash colours instead of the buffer
+simGetObjectPose    (handle, -1, pose[7])           x, y, z, qx, qy, qz, qw
+```
+
+Both are drawn in the object's own frame, unlit, right after the shapes and
+before the markers:
+
+* point clouds as `GL_POINTS` with `gl_PointSize` from `pointSize` (one draw per
+  cloud, since the size is a uniform), unlit like the engine draws them,
+* oc-trees as instanced unit cubes of `voxelSize`, lit with the scene lights and
+  ambient (one draw for all of them; centre, size, colour and the lit flag vary
+  per instance).
+
+Both write the same **linear depth** the shaded pass writes (`gl_FragDepth` in
+their fragment shaders) and are depth tested against the scene. That second part
+is not optional: the depth buffer holds linearised values, so a shader that
+writes plain window-space depth compares ~0.99 against everything else and the
+whole object hides behind the scene.
+
+Buffers are copied out of the engine's memory immediately: `simGetBufferProperty`
+hands back a buffer owned by the caller, so it is `simReleaseBuffer`ed as soon as
+it has been copied. Colours are treated as authored sRGB, like every other colour
+in the plugin; `randomColors` uses a hash of the point index, so points keep their
+colour from frame to frame instead of flickering.
+
+In a colour coded frame both are drawn with their object handle as the colour,
+exactly like meshes and markers.
 ## No Qt, and no window system requirement
 
 The plugin has no Qt dependency at all. `dumpbin /dependents` on the built DLL
@@ -384,6 +425,11 @@ Two changes got it there:
 * **One synchronisation per frame instead of two**: colour and depth are queued
   into two pixel-pack buffers and fetched afterwards (`PixelReader::queue()` /
   `fetch()`), so the GPU is waited for once rather than twice.
+* **The camera and light uniform buffers are re-bound every frame.** Binding
+  points are global GL state; the engine's own renderer (or a second renderer
+  instance) can bind something else to them, and then this renderer silently
+  reads a foreign camera matrix - geometry appears at a random place that moves
+  with the camera.
 
 Points worth knowing before optimising further:
 
