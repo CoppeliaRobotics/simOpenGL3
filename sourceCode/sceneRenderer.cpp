@@ -88,6 +88,7 @@ bool SceneRenderer::initialize(GLFuncs& gl, const RenderSettings& settings)
     // needs nothing else from the camera block).
     m_colorCodeProgram.use(gl);
     m_uColorCodeViewProjection = m_colorCodeProgram.location(gl, "uViewProjection");
+    m_uColorCodeClipPlanes = m_colorCodeProgram.location(gl, "uClipPlanes");
 
     m_markerProgram.use(gl);
     m_markerProgram.bindUniformBlock(gl, "CameraBlock", kBlockCamera);
@@ -462,7 +463,10 @@ void SceneRenderer::updateCameraBlock(GLFuncs& gl, const CameraData& camera)
     block.fogColor = Vec4(camera.fogColor, 0.0f);
     block.fogParams = Vec4(float(camera.fogType), camera.fogStart, camera.fogEnd,
                                 (camera.fogEnabled && m_settings.fogEnabled) ? 1.0f : 0.0f);
-    block.clipPlanes = Vec4(camera.nearPlane, camera.farPlane, 0.0f, 0.0f);
+    // z tells the shaders whether the projection needs the perspective
+    // linearisation; an orthographic one is already linear in window space.
+    block.clipPlanes = Vec4(camera.nearPlane, camera.farPlane, camera.perspective ? 1.0f : 0.0f,
+                            0.0f);
 
     m_cameraBuffer.upload(gl, GL_UNIFORM_BUFFER, 0, sizeof(GpuCamera), &block);
 }
@@ -918,6 +922,10 @@ void SceneRenderer::renderShadowMaps(GLFuncs& gl)
             m_depthProgram.use(gl);
             m_shadowAtlas.beginLayer(gl, light.firstLayer);
             m_depthProgram.set(gl, m_uLightSpaceMatrix, light.lightSpace);
+            // The camera depth prepass uses this same program and sets the clip
+            // planes to linearise its depth; clear them here so the shadow layers
+            // are written with plain window space depth.
+            m_depthProgram.set(gl, m_uDepthClipPlanes, Vec3(0.0f, 0.0f, 0.0f), 0.0f);
             drawRuns(gl, m_shadowRuns, true);
         }
     }
@@ -948,6 +956,10 @@ void SceneRenderer::renderDepthPrepass(GLFuncs& gl)
 {
     m_depthProgram.use(gl);
     m_depthProgram.set(gl, m_uLightSpaceMatrix, m_camera.viewProjection);
+    m_depthProgram.set(gl, m_uDepthClipPlanes,
+                       Vec3(m_camera.nearPlane, m_camera.farPlane,
+                            m_camera.perspective ? 1.0f : 0.0f),
+                       0.0f);
 
     gl.glDisable(GL_BLEND);
     gl.glEnable(GL_DEPTH_TEST);
@@ -1048,31 +1060,6 @@ void SceneRenderer::renderTonemap(GLFuncs& gl, OffscreenTarget& target)
     gl.glDepthMask(GL_TRUE);
 }
 
-// ---------------------------------------------------------------------------
-// Depth linearisation
-//
-// CoppeliaSim asks for linear depth, and expects exactly the same conversion
-// its built-in renderer applies after glReadPixels, so the formula is kept
-// identical here.
-// ---------------------------------------------------------------------------
-
-void SceneRenderer::lineariseDepth(float* depthBuffer, int width, int height) const
-{
-    const float farMinusNear = m_camera.farPlane - m_camera.nearPlane;
-    if (std::abs(farMinusNear) < 1e-9f)
-        return;
-
-    const float farDivided = m_camera.farPlane / farMinusNear;
-    const float nearTimesFar = m_camera.nearPlane * m_camera.farPlane;
-    const float inverseNearTimesFar = nearTimesFar / farMinusNear;
-
-    const int count = width * height;
-    for (int i = 0; i < count; ++i)
-    {
-        depthBuffer[i] = ((inverseNearTimesFar / (farDivided - depthBuffer[i])) -
-                          m_camera.nearPlane) / farMinusNear;
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Frame
@@ -1658,6 +1645,10 @@ void SceneRenderer::renderFrame(GLFuncs& gl, OffscreenTarget& target, FrameData&
 
         m_colorCodeProgram.use(gl);
         m_colorCodeProgram.set(gl, m_uColorCodeViewProjection, m_camera.viewProjection);
+        m_colorCodeProgram.set(gl, m_uColorCodeClipPlanes,
+                               Vec3(m_camera.nearPlane, m_camera.farPlane,
+                                    m_camera.perspective ? 1.0f : 0.0f),
+                               0.0f);
 
         // Every item, opaque, in submission order.
         drawRuns(gl, m_opaqueRuns, false);
@@ -1668,12 +1659,16 @@ void SceneRenderer::renderFrame(GLFuncs& gl, OffscreenTarget& target, FrameData&
         target.resolve(gl);
         renderTonemapPassThrough(gl, target);
 
-        if (readRgb && rgbTarget != nullptr)
-            target.readColor(gl, m_pixelReader, rgbTarget);
-        if (readDepth && depthTarget != nullptr)
+        if (readRgb && readDepth && rgbTarget != nullptr && depthTarget != nullptr)
         {
-            target.readDepth(gl, m_pixelReader, depthTarget);
-            lineariseDepth(depthTarget, m_camera.width, m_camera.height);
+            target.readColorAndDepth(gl, m_pixelReader, rgbTarget, depthTarget);
+        }
+        else
+        {
+            if (readRgb && rgbTarget != nullptr)
+                target.readColor(gl, m_pixelReader, rgbTarget);
+            if (readDepth && depthTarget != nullptr)
+                target.readDepth(gl, m_pixelReader, depthTarget);
         }
         return;
     }
@@ -1695,14 +1690,16 @@ void SceneRenderer::renderFrame(GLFuncs& gl, OffscreenTarget& target, FrameData&
     target.resolve(gl);
     renderTonemap(gl, target);
 
-    if (readRgb && rgbTarget != nullptr)
-        target.readColor(gl, m_pixelReader, rgbTarget);
-
-    if (readDepth && depthTarget != nullptr)
+    // Colour and depth share one synchronisation when both are wanted.
+    if (readRgb && readDepth && rgbTarget != nullptr && depthTarget != nullptr)
+        target.readColorAndDepth(gl, m_pixelReader, rgbTarget, depthTarget);
+    else
     {
-        target.readDepth(gl, m_pixelReader, depthTarget);
-        if (m_camera.perspective)
-            lineariseDepth(depthTarget, target.width(), target.height());
+        if (readRgb && rgbTarget != nullptr)
+            target.readColor(gl, m_pixelReader, rgbTarget);
+
+        if (readDepth && depthTarget != nullptr)
+            target.readDepth(gl, m_pixelReader, depthTarget);
     }
 
     m_statistics.lights = int(m_gpuLights.size());

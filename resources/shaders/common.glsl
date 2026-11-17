@@ -22,6 +22,24 @@ layout(std140) uniform CameraBlock
     vec4 uClipPlanes;    // x near, y far
 };
 
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
 struct GpuLight
 {
     vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
@@ -42,3 +60,4 @@ layout(std140) uniform LightBlock
 const int LIGHT_OMNI = 1;
 const int LIGHT_SPOT = 2;
 const int LIGHT_DIR = 3;
+

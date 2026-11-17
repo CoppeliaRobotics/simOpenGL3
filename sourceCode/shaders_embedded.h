@@ -45,6 +45,24 @@ layout(std140) uniform CameraBlock
     vec4 uClipPlanes;    // x near, y far
 };
 
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
 struct GpuLight
 {
     vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
@@ -65,6 +83,7 @@ layout(std140) uniform LightBlock
 const int LIGHT_OMNI = 1;
 const int LIGHT_SPOT = 2;
 const int LIGHT_DIR = 3;
+
 
 
 layout(location = 0) in vec3 aPosition;
@@ -147,6 +166,24 @@ layout(std140) uniform CameraBlock
     vec4 uClipPlanes;    // x near, y far
 };
 
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
 struct GpuLight
 {
     vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
@@ -167,6 +204,7 @@ layout(std140) uniform LightBlock
 const int LIGHT_OMNI = 1;
 const int LIGHT_SPOT = 2;
 const int LIGHT_DIR = 3;
+
 
 
 in vec3 vWorldPosition;
@@ -371,8 +409,13 @@ void main()
 
     color = mix(color, uFogColor.rgb, fogFactor());
 
+    gl_FragDepth = lineariseWindowDepth(gl_FragCoord.z);
     FragColor = vec4(color, vOpacity);
 }
+
+
+
+
 )GLSL";
 
 inline const char* const kDepthVert = R"GLSL(#version 330 core
@@ -402,8 +445,29 @@ void main()
 
 inline const char* const kDepthFrag = R"GLSL(#version 330 core
 
+// Depth prepass and shadow layers both use this program.
+//
+// gl_FragDepth is assigned unconditionally: a shader that only writes it on some
+// paths leaves it undefined on the others, which silently produced garbage shadow
+// maps.  The clip planes select the conversion - they are cleared to zero for the
+// shadow passes, where plain window space depth is wanted.
+
+// x near, y far, z 1 for a perspective camera, 0 for plain depth
+uniform vec4 uClipPlanes;
+
 void main()
 {
+    if (uClipPlanes.z < 0.5)
+    {
+        gl_FragDepth = gl_FragCoord.z;
+        return;
+    }
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    float depth = gl_FragCoord.z;
+    gl_FragDepth = ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
 }
 )GLSL";
 
@@ -551,6 +615,24 @@ layout(std140) uniform CameraBlock
     vec4 uClipPlanes;    // x near, y far
 };
 
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
 struct GpuLight
 {
     vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
@@ -571,6 +653,7 @@ layout(std140) uniform LightBlock
 const int LIGHT_OMNI = 1;
 const int LIGHT_SPOT = 2;
 const int LIGHT_DIR = 3;
+
 
 
 layout(location = 0) in vec3 aPosition;
@@ -627,6 +710,24 @@ layout(std140) uniform CameraBlock
     vec4 uClipPlanes;    // x near, y far
 };
 
+// Window space depth -> the normalised linear depth CoppeliaSim expects.  This is
+// the same conversion its built-in renderer applies to the result of
+// glReadPixels, evaluated per fragment instead: the depth buffer then already
+// holds linear values, so no per pixel pass over the image is needed.
+//
+// uClipPlanes.z is 1 for a perspective camera; an orthographic projection is
+// already linear in window space.
+float lineariseWindowDepth(float depth)
+{
+    if (uClipPlanes.z < 0.5)
+        return depth;
+
+    float nearPlane = uClipPlanes.x;
+    float farPlane = uClipPlanes.y;
+    float range = farPlane - nearPlane;
+    return ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) / range;
+}
+
 struct GpuLight
 {
     vec4 positionKind;   // xyz world position, w light type (1 omni, 2 spot, 3 dir)
@@ -647,6 +748,7 @@ layout(std140) uniform LightBlock
 const int LIGHT_OMNI = 1;
 const int LIGHT_SPOT = 2;
 const int LIGHT_DIR = 3;
+
 
 
 in vec4 vColor;
@@ -704,8 +806,11 @@ void main()
     // The marker colour keeps its alpha; the marker pass blends it (and turns
     // blending off for colour coded frames, where the handle bytes must survive).
     float lit = vLit * float(uLit);
+    gl_FragDepth = lineariseWindowDepth(gl_FragCoord.z);
     FragColor = vec4(vColor.rgb * mix(vec3(1.0), lighting, lit), vColor.a);
 }
+
+
 
 
 
@@ -755,10 +860,29 @@ in vec4 vColor;
 
 out vec4 FragColor;
 
+// x near, y far, z 1 for a perspective camera (see common.glsl)
+uniform vec4 uClipPlanes;
+
 void main()
 {
+    // Same linearisation as the shaded pass, so the depth image is identical
+    // whichever mode the sensor uses.  gl_FragDepth is always assigned: a
+    // conditional write leaves it undefined on the other path.
+    gl_FragDepth = gl_FragCoord.z;
+    if (uClipPlanes.z >= 0.5)
+    {
+        float nearPlane = uClipPlanes.x;
+        float farPlane = uClipPlanes.y;
+        float range = farPlane - nearPlane;
+        float depth = gl_FragCoord.z;
+        gl_FragDepth = ((nearPlane * farPlane / range) / (farPlane / range - depth) - nearPlane) /
+                       range;
+    }
+
     FragColor = vec4(vColor.rgb, 1.0);
 }
+
+
 )GLSL";
 
 } // namespace shaders

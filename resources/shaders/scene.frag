@@ -213,5 +213,10 @@ void main()
 
     color = mix(color, uFogColor.rgb, fogFactor());
 
+    gl_FragDepth = lineariseWindowDepth(gl_FragCoord.z);
     FragColor = vec4(color, vOpacity);
 }
+
+
+
+

@@ -219,7 +219,7 @@ private:
     void drawRuns(GLFuncs& gl, const std::vector<Run>& runs, bool shadowPass);
     void bindRunAttributes(GLFuncs& gl, const Run& run);
 
-    void lineariseDepth(float* depthBuffer, int width, int height) const;
+
 
 private:
     RenderSettings m_settings;
@@ -237,6 +237,7 @@ private:
     // only valid for the program that owns it, so the depth pass keeps one per
     // program even though both declare the same uniform name.
     int m_uLightSpaceMatrix = -1;
+    int m_uDepthClipPlanes = -1;
     int m_uLightSpaceMatrixOmni = -1;
     int m_uLightPosition = -1;
     int m_uNearPlane = -1;
@@ -251,6 +252,7 @@ private:
     int m_uToneMapping = -1;
     int m_uGamma = -1;
     int m_uColorCodeViewProjection = -1;
+    int m_uColorCodeClipPlanes = -1;
     int m_uMarkerLit = -1;
 
     GpuBuffer m_cameraBuffer;

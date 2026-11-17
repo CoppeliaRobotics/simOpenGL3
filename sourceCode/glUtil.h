@@ -215,18 +215,34 @@ private:
 // invalidate of client memory.  A fence is deliberately *not* used:
 // CoppeliaSim needs the pixels before this callback returns, so there is
 // nothing to overlap.
+//
+// A frame usually reads two buffers (colour and depth).  Each map of a PBO
+// waits for the GPU, so the two reads are queued first and fetched afterwards:
+// that costs one synchronisation instead of two.
 // ---------------------------------------------------------------------------
 class PixelReader
 {
 public:
     void ensureCapacity(GLFuncs& gl, GLsizeiptr bytes);
+    void ensureCapacityFor(GLFuncs& gl, int slot, GLsizeiptr bytes);
     void destroy(GLFuncs& gl);
 
+    // Queues a read into one of the reader's buffers; returns a slot id.
+    int queue(GLFuncs& gl, GLuint framebuffer, int width, int height, GLenum format, GLenum type,
+              GLsizeiptr bytes);
+    // Copies a queued read into destination (and waits for the GPU).
+    bool fetch(GLFuncs& gl, int slot, GLsizeiptr bytes, void* destination);
+
+    // Queue + fetch in one call, for single buffer reads.
     void readPixels(GLFuncs& gl, GLuint framebuffer, int width, int height, GLenum format,
                     GLenum type, GLsizeiptr bytes, void* destination);
 
 private:
-    GpuBuffer m_buffer;
+    static constexpr int kSlots = 2;
+    GpuBuffer m_buffers[kSlots];
+    GLsizeiptr m_pending[kSlots] = {0, 0};
+    int m_nextSlot = 0;
+    int m_generation = 0; // invalidates slots between frames
 };
 
 // ---------------------------------------------------------------------------

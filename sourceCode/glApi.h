@@ -247,6 +247,7 @@ typedef void(GLAPIENTRY* PFN_glDrawArraysInstanced)(GLenum, GLint, GLsizei, GLsi
 typedef void(GLAPIENTRY* PFN_glDrawBuffers)(GLsizei, const GLenum*);
 typedef void(GLAPIENTRY* PFN_glEnable)(GLenum);
 typedef void(GLAPIENTRY* PFN_glEnableVertexAttribArray)(GLuint);
+typedef void(GLAPIENTRY* PFN_glFinish)(void);
 typedef void(GLAPIENTRY* PFN_glFramebufferRenderbuffer)(GLenum, GLenum, GLenum, GLuint);
 typedef void(GLAPIENTRY* PFN_glFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
 typedef void(GLAPIENTRY* PFN_glFramebufferTextureLayer)(GLenum, GLenum, GLuint, GLint, GLint);
@@ -331,6 +332,7 @@ typedef void(GLAPIENTRY* PFN_glPointSize)(GLfloat);
     X(DrawBuffers)             \
     X(Enable)                  \
     X(EnableVertexAttribArray) \
+    X(Finish)                  \
     X(FramebufferRenderbuffer) \
     X(FramebufferTexture2D)    \
     X(FramebufferTextureLayer) \

@@ -64,8 +64,11 @@ void main()
     // The marker colour keeps its alpha; the marker pass blends it (and turns
     // blending off for colour coded frames, where the handle bytes must survive).
     float lit = vLit * float(uLit);
+    gl_FragDepth = lineariseWindowDepth(gl_FragCoord.z);
     FragColor = vec4(vColor.rgb * mix(vec3(1.0), lighting, lit), vColor.a);
 }
+
+
 
 
 

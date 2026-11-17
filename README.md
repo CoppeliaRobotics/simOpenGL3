@@ -156,8 +156,9 @@ them:
   `normalBias` (`@lightProjection@openGL3`), plus `noShadow`. Scenes that were
   tuned for the legacy renderer keep their settings.
 * The same depth linearisation formula that `CVisionSensor` applies to its own
-  `glReadPixels` result, so vision sensor depth values are bit-comparable with
-  the built-in renderer.
+  `glReadPixels` result, but evaluated per fragment in the shaders: the depth
+  buffer already holds linear values, so no per pixel pass is needed after the
+  read-back. Values agree to float precision.
 
 ---
 
@@ -347,12 +348,57 @@ extrenderer_mesh  ─┘
   tone map           exposure -> curve -> sRGB, into the RGBA8 target
         │
         ▼
-  readback           glReadPixels through a PBO; depth linearised on the CPU
-        │            exactly like CVisionSensor does
+  readback           glReadPixels through a PBO; colour and depth share one
+        │            synchronisation (see Performance)
         ▼
 extrenderer_stop
 ```
 
+## Performance
+
+The read-back is what a frame costs, not the raster work: the plugin has to hand
+the image to CoppeliaSim before the callback returns, so every frame ends with a
+synchronous `glReadPixels` + map. Measured with the built-in benchmark
+(`smokeTest.exe`, 7 draw calls, 21 shadow draws, 56 instances):
+
+| 1280x720 | before | after |
+| --- | --- | --- |
+| full frame (colour + depth read) | 1.90 ms | 1.34 ms |
+
+Where the remaining 1.34 ms goes:
+
+| stage | cost | note |
+| --- | --- | --- |
+| GPU: shadows, forward pass, MSAA resolve, tone map | 0.41 ms | shadow map cache would remove most of this on static scenes |
+| depth read-back | 0.64 ms | 3.7 MB, 4 bytes per pixel |
+| colour read-back | 0.45 ms | 2.8 MB, RGB8 |
+| CPU work after the read | ~0 ms | was 0.35 ms when depth was linearised on the CPU |
+
+Two changes got it there:
+
+* **Depth is linearised on the GPU** (`gl_FragDepth` in `scene.frag`,
+  `marker.frag`, `colorcode.frag` and `depth.frag`), so the read-back is a plain
+  transfer and no pass over the image follows. The depth prepass and the shadow
+  layers share `depth.frag`, which is why the clip planes are cleared for the
+  shadow passes: they must write plain window-space depth.
+* **One synchronisation per frame instead of two**: colour and depth are queued
+  into two pixel-pack buffers and fetched afterwards (`PixelReader::queue()` /
+  `fetch()`), so the GPU is waited for once rather than twice.
+
+Points worth knowing before optimising further:
+
+* MSAA costs nothing measurable here (0.02 ms): the resolve is bandwidth, not
+  fill rate.
+* Colour read-back is pure transfer (2.8 MB at 1280x720); the only way to cut it
+  is to not need the image.
+* `gl_FragDepth` disables early-Z. That cost more than the CPU conversion saved
+  on a per-fragment heavy scene, so if a user reports a regression there, the
+  alternative is to keep window depth and linearise on the GPU into an extra
+  R32F attachment instead - slightly more code, keeps early-Z.
+* A static scene renders the same shadow maps every frame; caching them behind a
+  signature of lights, item transforms and a geometry version counter is the
+  next large win (about 0.3 ms of the 0.41 ms GPU time here, more in real
+  scenes).
 ## File map
 
 | file | contents |

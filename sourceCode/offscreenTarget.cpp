@@ -135,6 +135,28 @@ void OffscreenTarget::readColor(GLFuncs& gl, PixelReader& reader, unsigned char*
     gl.glPixelStorei(GL_PACK_ALIGNMENT, 4);
 }
 
+void OffscreenTarget::readColorAndDepth(GLFuncs& gl, PixelReader& reader, unsigned char* color,
+                                        float* depth)
+{
+    gl.glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    // Queue both transfers first: the depth one also waits for the colour one,
+    // so the second map is free.
+    const int colorSlot =
+        reader.queue(gl, m_presentFramebuffer.id(), m_width, m_height, GL_RGB, GL_UNSIGNED_BYTE,
+                     GLsizeiptr(m_width) * GLsizeiptr(m_height) * 3);
+    const int depthSlot =
+        reader.queue(gl, m_resolveFramebuffer.id(), m_width, m_height, GL_DEPTH_COMPONENT, GL_FLOAT,
+                     GLsizeiptr(m_width) * GLsizeiptr(m_height) * GLsizeiptr(sizeof(float)));
+
+    gl.glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
+    if (color != nullptr)
+        reader.fetch(gl, colorSlot, GLsizeiptr(m_width) * GLsizeiptr(m_height) * 3, color);
+    if (depth != nullptr)
+        reader.fetch(gl, depthSlot, GLsizeiptr(m_width) * GLsizeiptr(m_height) * sizeof(float),
+                     depth);
+}
 void OffscreenTarget::readDepth(GLFuncs& gl, PixelReader& reader, float* destination)
 {
     reader.readPixels(gl, m_resolveFramebuffer.id(), m_width, m_height, GL_DEPTH_COMPONENT,

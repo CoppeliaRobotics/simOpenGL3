@@ -489,37 +489,69 @@ void GpuProgram::set(GLFuncs& gl, int location, const Mat4& value) const
 
 void PixelReader::ensureCapacity(GLFuncs& gl, GLsizeiptr bytes)
 {
-    if (m_buffer.capacity() >= bytes)
+    ensureCapacityFor(gl, 0, bytes);
+}
+
+void PixelReader::ensureCapacityFor(GLFuncs& gl, int slot, GLsizeiptr bytes)
+{
+    if (m_buffers[slot].capacity() >= bytes)
         return;
-    m_buffer.allocate(gl, GL_PIXEL_PACK_BUFFER, bytes, GL_STREAM_READ);
+    m_buffers[slot].allocate(gl, GL_PIXEL_PACK_BUFFER, bytes, GL_STREAM_READ);
 }
 
 void PixelReader::destroy(GLFuncs& gl)
 {
-    m_buffer.destroy(gl);
+    for (GpuBuffer& buffer : m_buffers)
+        buffer.destroy(gl);
+}
+
+int PixelReader::queue(GLFuncs& gl, GLuint framebuffer, int width, int height, GLenum format,
+                       GLenum type, GLsizeiptr bytes)
+{
+    if (bytes <= 0 || width <= 0 || height <= 0)
+        return -1;
+
+    // Slots are recycled within a frame; the counter makes a stale id harmless.
+    const int slot = m_nextSlot;
+    m_nextSlot = (m_nextSlot + 1) % kSlots;
+
+    ensureCapacityFor(gl, slot, bytes);
+    m_pending[slot] = bytes;
+
+    gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, m_buffers[slot].id());
+    gl.glReadPixels(0, 0, width, height, format, type, nullptr);
+    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    return slot;
+}
+
+bool PixelReader::fetch(GLFuncs& gl, int slot, GLsizeiptr bytes, void* destination)
+{
+    if (slot < 0 || slot >= kSlots || destination == nullptr || bytes <= 0)
+        return false;
+    if (m_pending[slot] < bytes)
+        return false;
+
+    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, m_buffers[slot].id());
+    void* mapped = gl.glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, bytes, GL_MAP_READ_BIT);
+    bool copied = false;
+    if (mapped != nullptr)
+    {
+        std::memcpy(destination, mapped, std::size_t(bytes));
+        gl.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        copied = true;
+    }
+    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    m_pending[slot] = 0;
+    return copied;
 }
 
 void PixelReader::readPixels(GLFuncs& gl, GLuint framebuffer, int width, int height, GLenum format,
                              GLenum type, GLsizeiptr bytes, void* destination)
 {
-    if (bytes <= 0 || destination == nullptr)
-        return;
-
-    ensureCapacity(gl, bytes);
-    gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
-    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, m_buffer.id());
-    gl.glReadPixels(0, 0, width, height, format, type, nullptr);
-    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-
-    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, m_buffer.id());
-    void* mapped = gl.glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, bytes, GL_MAP_READ_BIT);
-    if (mapped != nullptr)
-    {
-        std::memcpy(destination, mapped, std::size_t(bytes));
-        gl.glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-    }
-    gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    const int slot = queue(gl, framebuffer, width, height, format, type, bytes);
+    fetch(gl, slot, bytes, destination);
 }
 
 // ---------------------------------------------------------------------------

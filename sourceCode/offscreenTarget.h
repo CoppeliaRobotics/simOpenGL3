@@ -54,6 +54,10 @@ public:
     GLuint presentTexture() const { return m_presentColor.id(); }
 
     void readColor(GLFuncs& gl, PixelReader& reader, unsigned char* destination);
+    // Reads colour and depth together: the two PBO reads are queued before the
+    // first map, so the GPU is only waited for once.
+    void readColorAndDepth(GLFuncs& gl, PixelReader& reader, unsigned char* color,
+                           float* depth);
     void readDepth(GLFuncs& gl, PixelReader& reader, float* destination);
 
 private:

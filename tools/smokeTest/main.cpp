@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <vector>
 
@@ -633,6 +634,83 @@ int main(int, char**)
     }
 
     codedRenderer.shutdown(*gl);
+
+    // ---- benchmark ---------------------------------------------------------
+    // Attributes the frame cost to the stages, on the same scene and camera.
+    // glFinish() is called around every measurement, so GPU work is counted.
+    {
+        const int benchFrames = 60;
+
+        const auto measure = [&](const RenderSettings& benchSettings, int w, int h, bool readRgb,
+                                 bool readDepth, const char* label) {
+            SceneRenderer benchRenderer;
+            if (!benchRenderer.initialize(*gl, benchSettings))
+                return;
+            OffscreenTarget benchTarget;
+            if (!benchTarget.create(*gl, w, h, benchSettings))
+                return;
+
+            // Each renderer owns its geometry cache, so the same meshes have to
+            // be uploaded again for the scene to be the real one.
+            benchRenderer.uploadGeometry(*gl, 1, positions.data(), int(positions.size() / 3),
+                                         normals.data(), int(normals.size() / 3), uvs.data(),
+                                         int(uvs.size() / 2), indices.data(), int(indices.size()));
+            benchRenderer.uploadGeometry(*gl, 2, groundPositions, 4, groundNormals, 6, groundUvs,
+                                         6, groundIndices, 6);
+
+            std::vector<unsigned char> benchRgb(std::size_t(w) * std::size_t(h) * 3, 0);
+            std::vector<float> benchDepth(std::size_t(w) * std::size_t(h), 1.0f);
+
+            benchRenderer.renderFrame(*gl, benchTarget, frame, benchRgb.data(), benchDepth.data(),
+                                      readRgb, readDepth);
+            gl->glFinish();
+
+            // glFinish() after every frame: without a read-back the frame is only
+            // queued, so timing without it would measure CPU submission alone.
+            const auto start = std::chrono::steady_clock::now();
+            for (int i = 0; i < benchFrames; ++i)
+            {
+                benchRenderer.renderFrame(*gl, benchTarget, frame, benchRgb.data(),
+                                          benchDepth.data(), readRgb, readDepth);
+                gl->glFinish();
+            }
+            gl->glFinish();
+            const auto end = std::chrono::steady_clock::now();
+
+            const SceneRenderer::Statistics& benchStats = benchRenderer.statistics();
+            const double msPerFrame =
+                std::chrono::duration<double, std::milli>(end - start).count() / benchFrames;
+            std::printf("  %-46s %7.2f ms  (%d draws, %d shadow draws)\n", label, msPerFrame,
+                        benchStats.drawCalls, benchStats.shadowDrawCalls);
+
+            benchRenderer.shutdown(*gl);
+        };
+
+        std::printf("benchmark, %d frames each:\n", benchFrames);
+
+        RenderSettings noShadows = settings;
+        noShadows.shadowsEnabled = false;
+        RenderSettings noMsaa = settings;
+        noMsaa.msaaSamples = 1;
+        RenderSettings nothing = settings;
+        nothing.shadowsEnabled = false;
+        nothing.msaaSamples = 1;
+
+        for (int size = 0; size < 2; ++size)
+        {
+            const int w = size == 0 ? width : 1280;
+            const int h = size == 0 ? height : 720;
+            std::printf(" %dx%d\n", w, h);
+            measure(settings, w, h, true, true, "full (shadows, MSAA, colour+depth)");
+            measure(noShadows, w, h, true, true, "no shadows");
+            measure(noMsaa, w, h, true, true, "no MSAA");
+            measure(settings, w, h, true, false, "colour only (no depth read)");
+            measure(settings, w, h, false, true, "depth only (no colour read)");
+            measure(settings, w, h, false, false, "GPU only: no read-back, finish per frame");
+            measure(nothing, w, h, false, false, "GPU only: no shadows, no MSAA, no read-back");
+        }
+    }
+
 
     renderer.shutdown(*gl);
     context.doneCurrent();
