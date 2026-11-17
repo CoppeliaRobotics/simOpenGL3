@@ -61,7 +61,7 @@ struct RendererState
 
     std::vector<int> unknownMessages;
     bool markerReported = false;
-    bool markerSizesReported = false;
+
     bool markerRejectedReported = false;
 };
 
@@ -738,7 +738,6 @@ void handleMarker(void** data)
         if (marker.sizes.empty())
             marker.sizes.assign({1.0f, 1.0f, 1.0f});
 
-        const int reportedVertexCount = readInt(data[9], 0);
         const int indexCount = readInt(data[11], 0);
         if (indexCount <= 0 || (indexCount % 3) != 0)
             return;
@@ -773,20 +772,7 @@ void handleMarker(void** data)
                 marker.normals.assign(normals, normals + std::size_t(indexCount) * 3);
         }
 
-        // One line per run with the numbers the engine reports, so a unit
-        // mismatch is visible instead of guessed: the vertices, indices and
-        // normals below are the sizes actually copied.
-        if (!s.markerSizesReported)
-        {
-            s.markerSizesReported = true;
-            logMessage(sim_verbosity_warnings,
-                       std::string("custom marker: engine reports ") +
-                           std::to_string(reportedVertexCount) + " vertices and " +
-                           std::to_string(indexCount) + " indices; copied " +
-                           std::to_string(marker.vertices.size() / 3) + " vertices, " +
-                           std::to_string(marker.indices.size()) + " indices, " +
-                           std::to_string(marker.normals.size() / 3) + " normals");
-        }
+
     }
 
     // The marker frame is always applied: the points are relative to it, and so
