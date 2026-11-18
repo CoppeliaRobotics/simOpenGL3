@@ -39,9 +39,7 @@ enum MarkerType
     markerTypeDiscs = 10,
     markerTypeCubes = 11,
     markerTypeCylinders = 12,
-    markerTypeCustom = 13,
-    markerTypeTubes = 14,
-    markerTypeAxes = 15
+    markerTypeCustom = 13
 };
 
 enum MarkerOption

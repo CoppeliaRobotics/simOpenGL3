@@ -59,10 +59,9 @@ struct CameraData
 // handler copies exactly what the type defines:
 //   points   3 floats per point, already in world space unless the options carry
 //            sim_markeropts_local, in which case they are relative to `transform`
-//   colors   4 bytes per point, for every type except axes (which carry none)
+//   colors   4 bytes per point
 //   quats    4 floats per item, only for the one-point primitives and custom
-//   sizes    3 floats per item for those same types, but a tube carries a single
-//            size triple whose first float is the radius
+//   sizes    3 floats per item for those same types
 //   custom   data[8]/[9] vertices (3 floats per point), data[10]/[11] indices
 //            (3 per triangle, zero based into the vertices), data[12] optional
 //            normals, 3 floats per index, i.e. one per triangle corner
@@ -220,7 +219,7 @@ private:
     const Geometry* findGeometry(std::uint64_t meshKey) const;
 
     // Tessellates the frame's markers and draws them: points, lines, triangles,
-    // tubes and the instanced primitives, split into a normal and an overlay
+    // the primitives and the custom mesh, split into a normal and an overlay
     // batch (overlay markers ignore the depth buffer).
     void renderMarkers(GLFuncs& gl, const FrameData& frame);
     // Point clouds and oc-tree voxels: unlit, drawn after the shapes.

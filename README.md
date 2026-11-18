@@ -122,14 +122,13 @@ them:
 
 ### Kept on purpose
 
-* **Markers** are supported: all eleven marker types (`sim_markertype_*`),
-  including `custom` meshes, with the `overlay` (drawn without depth testing)
-  and `notshaded` (plain colour, unlit) options; the marker frame is always
-  applied. The
+* **Markers** are supported for every type the callback still sends (points,
+  lines, triangles, spheres, squares, discs, cubes, cylinders and `custom`
+  meshes), with the `overlay` (drawn without depth testing) and `notshaded`
+  (plain colour, unlit) options; the marker frame is always applied. The
   engine sends primitive data rather than geometry, so the marker pass
   tessellates it on the CPU into points, lines and triangles - unit shapes for
-  the primitives, a prism per tube segment (radius from `sizes[0]`), three
-  coloured lines for axes, and the indexed mesh for `custom`. Markers are
+  the primitives, and the indexed mesh for `custom`. Markers are
   shaded diffuse-only by the scene lights (no shadows, no specular, like
   CoppeliaSim's own marker rendering) and drawn after the scene, into the
   multisampled target, so overlay markers land on top of the resolved image.

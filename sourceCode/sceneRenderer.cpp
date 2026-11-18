@@ -1522,68 +1522,6 @@ void SceneRenderer::renderMarkers(GLFuncs& gl, const FrameData& frame)
                     pushVertex(triangles, world(pointAt(i + k)), colorAt(i + k), facingNormal(world(pointAt(i + k))));
             }
         }
-        else if (marker.type == markerTypeTubes)
-        {
-            // Mirrors the engine: radius from sizes[0], colour from the first
-            // point of the segment, one prism per segment.
-            const float radius = marker.sizes.empty() ? 0.01f : marker.sizes[0] * 0.5f;
-            const int sides = 8;
-            for (int i = 0; i + 1 < pointCount; i += 2)
-            {
-                const Vec3 p0 = world(pointAt(i));
-                const Vec3 p1 = world(pointAt(i + 1));
-                const Vec3 axis = p1 - p0;
-                const float length = axis.length();
-                if (length < 1e-6f)
-                    continue;
-
-                const Vec3 direction = axis * (1.0f / length);
-                // Any vector perpendicular to the segment works as the basis.
-                Vec3 side = (std::fabs(direction.z()) < 0.9f) ? Vec3(0.0f, 0.0f, 1.0f)
-                                                              : Vec3(1.0f, 0.0f, 0.0f);
-                const Vec3 u = Vec3::crossProduct(direction, side).normalized();
-                const Vec3 v = Vec3::crossProduct(direction, u);
-
-                const Vec4 color = colorAt(i);
-                for (int side0 = 0; side0 < sides; ++side0)
-                {
-                    const float a0 = 2.0f * 3.14159265358979f * float(side0) / float(sides);
-                    const float a1 = 2.0f * 3.14159265358979f * float(side0 + 1) / float(sides);
-                    const Vec3 n0 = u * std::cos(a0) + v * std::sin(a0);
-                    const Vec3 n1 = u * std::cos(a1) + v * std::sin(a1);
-                    const Vec3 r0 = n0 * radius;
-                    const Vec3 r1 = n1 * radius;
-
-                    pushVertex(triangles, p0 + r0, color, n0);
-                    pushVertex(triangles, p1 + r0, color, n0);
-                    pushVertex(triangles, p1 + r1, color, n1);
-                    pushVertex(triangles, p0 + r0, color, n0);
-                    pushVertex(triangles, p1 + r1, color, n1);
-                    pushVertex(triangles, p0 + r1, color, n1);
-                }
-            }
-        }
-        else if (marker.type == markerTypeAxes)
-        {
-            for (int i = 0; i < pointCount; ++i)
-            {
-                const Mat4 matrix = markerTransform(frameRotation, quatAt(i), sizeAt(i));
-                const Vec3 origin = world(pointAt(i));
-                const auto emit = [&](const Vec3& extent, const Vec3& rgb) {
-                    const Vec4 a = matrix * Vec4(Vec3(0.0f, 0.0f, 0.0f), 1.0f);
-                    const Vec4 b = matrix * Vec4(extent, 1.0f);
-                    const Vec4 color = colorCoded ? handleColor(marker.handle)
-                                                  : Vec4(gamma ? linearFromSrgb(rgb) : rgb, 1.0f);
-                    const Vec3 va = Vec3(a.x(), a.y(), a.z()) + origin;
-                    const Vec3 vb = Vec3(b.x(), b.y(), b.z()) + origin;
-                    pushVertex(lines, va, color, facingNormal(va));
-                    pushVertex(lines, vb, color, facingNormal(vb));
-                };
-                emit(Vec3(1.0f, 0.0f, 0.0f), Vec3(1.0f, 0.0f, 0.0f));
-                emit(Vec3(0.0f, 1.0f, 0.0f), Vec3(0.0f, 1.0f, 0.0f));
-                emit(Vec3(0.0f, 0.0f, 1.0f), Vec3(0.0f, 0.0f, 1.0f));
-            }
-        }
         else if (marker.type == markerTypeCustom)
         {
             const int indexCount = int(marker.indices.size());

@@ -681,24 +681,16 @@ void handleMarker(void** data)
 
     // How the optional arrays are sized depends on the type, and guessing wrong
     // means reading past the end of the engine's vector:
-    //   colours  always 4 per point (2*4 per line/tube, 3*4 per triangle),
-    //            except for axes, which carry none
+    //   colours  always 4 per point (2*4 per line, 3*4 per triangle)
     //   quats    4 per item, only for the one-point primitives and custom
-    //   sizes    3 per item for those same types, but tubes only carry a single
-    //            size triple (the radius), which is what the engine itself
-    //            reads (_sizes[0] in CMarker::_drawTubeLines)
-    const int pointsPerItem =
-        (type == markerTypeLines || type == markerTypeTubes)
-            ? 2
-            : (type == markerTypeTriangles ? 3 : 1);
+    //   sizes    3 per item for those same types
+    const int pointsPerItem = (type == markerTypeLines) ? 2 : (type == markerTypeTriangles ? 3 : 1);
     const int itemCount = pointsPerItem > 0 ? pointCount / pointsPerItem : 0;
     const bool usesItemPose =
         (type == markerTypeSpheres || type == markerTypeSquares || type == markerTypeDiscs ||
-         type == markerTypeCubes || type == markerTypeCylinders || type == markerTypeAxes ||
-         type == markerTypeCustom);
-    const bool usesColors = (type != markerTypeAxes);
+         type == markerTypeCubes || type == markerTypeCylinders || type == markerTypeCustom);
 
-    if (usesColors && data[5] != nullptr)
+    if (data[5] != nullptr)
     {
         const unsigned char* colors = *static_cast<const unsigned char* const*>(data[5]);
         if (colors != nullptr)
@@ -715,9 +707,7 @@ void handleMarker(void** data)
         const float* sizes = *static_cast<const float* const*>(data[6]);
         if (sizes != nullptr)
         {
-            if (type == markerTypeTubes)
-                marker.sizes.assign(sizes, sizes + 3); // one radius, engine reads sizes[0]
-            else if (usesItemPose && itemCount > 0)
+            if (usesItemPose && itemCount > 0)
                 marker.sizes.assign(sizes, sizes + std::size_t(itemCount) * 3);
         }
     }

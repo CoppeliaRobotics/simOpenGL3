@@ -386,8 +386,6 @@ int main(int, char**)
         add(markerTypePoints, {2.0f, 2.0f, 2.0f}, {255, 255, 0, 255}, {}, false);
         add(markerTypeLines, {2.0f, 0.0f, 0.0f, 2.0f, 0.0f, -2.0f},
             {255, 0, 0, 255, 0, 255, 0, 255}, {}, false);
-        add(markerTypeTubes, {-2.0f, 0.0f, 0.0f, -2.0f, 2.0f, 0.0f}, {0, 255, 255, 255},
-            {0.1f, 0.0f, 0.0f}, false);
         add(markerTypeTriangles, {0.0f, 2.0f, 0.0f, 0.8f, 2.0f, 0.5f, -0.8f, 2.0f, 0.5f},
             {255, 0, 255, 255, 0, 255, 255, 255, 255, 255, 0, 255}, {}, false);
         add(markerTypeCubes, {2.5f, 0.5f, 0.0f}, {255, 128, 0, 255}, {0.5f, 0.5f, 0.5f}, false);
@@ -409,7 +407,6 @@ int main(int, char**)
         add(markerTypeDiscs, {2.0f, 0.0f, 2.0f}, {0, 255, 128, 255}, {0.6f, 0.6f, 0.6f}, false);
         add(markerTypeSquares, {-2.0f, 0.0f, -2.0f}, {255, 255, 255, 255},
             {0.6f, 0.6f, 0.6f}, false);
-        add(markerTypeAxes, {0.0f, 0.0f, 0.0f}, {}, {1.0f, 1.0f, 1.0f}, false);
         add(markerTypePoints, {1.5f, 3.0f, 1.5f}, {255, 255, 0, 255}, {}, true); // overlay
 
         // Custom mesh: a unit tetrahedron.
@@ -431,28 +428,6 @@ int main(int, char**)
         custom.indices = {0, 1, 2, 0, 1, 3, 1, 2, 3, 0, 2, 3};
         frame.markers.push_back(std::move(custom));
 
-        // Edge cases: no colours at all (axes), no sizes (lines/triangles),
-        // a custom mesh without normals, a non-local marker, and flat shading
-        // on every type that produces triangles.
-        {
-            MarkerItem axes;
-            axes.type = markerTypeAxes;
-            axes.options = 0;
-            axes.transform.setToIdentity();
-            axes.points = {1.0f, 1.0f, 1.0f};
-            axes.quats = {0.0f, 0.0f, 0.0f, 1.0f};
-            axes.sizes = {0.7f, 0.7f, 0.7f};
-            frame.markers.push_back(std::move(axes));
-        }
-        {
-            MarkerItem tubes;
-            tubes.type = markerTypeTubes;
-            tubes.options = 0; // no sizes at all, pose supplied anyway
-            tubes.transform.setToIdentity();
-            tubes.points = {0.5f, 2.0f, 0.5f, 1.5f, 2.0f, 0.5f};
-            tubes.colors = {10, 200, 220, 255, 10, 200, 220, 255};
-            frame.markers.push_back(std::move(tubes));
-        }
         {
             MarkerItem plain; // options == 0: pose must be ignored
             plain.type = markerTypeSquares;
@@ -979,8 +954,6 @@ int main(int, char**)
                                           shownX, shownY);
             const bool projected = projectPoint(probeFrame.camera.viewProjection, worldCentre, width,
                                                height, expectedX, expectedY);
-            const int chosenCentreX = int(expectedX);
-            const int chosenCentreY = int(expectedY);
             std::printf("camera %d: centroid (%.1f, %.1f), projected (%.1f, %.1f), voxels %d, nonbg %d, coded %d",
                         c, shownX, shownY, expectedX, expectedY, int(probe.positions.size() / 3),
                         countNonBackground(probeRgb, width, height), int(probeFrame.camera.colorCoded));
