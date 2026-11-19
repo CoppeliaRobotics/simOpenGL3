@@ -64,7 +64,6 @@ struct RendererState
     std::vector<int> unknownMessages;
     bool markerReported = false;
 
-    bool markerRejectedReported = false;
 };
 
 RendererState& state()
@@ -630,15 +629,7 @@ void handleMarker(void** data)
 {
     RendererState& s = state();
     if (s.activeTarget == nullptr)
-    {
-        if (!s.markerRejectedReported)
-        {
-            s.markerRejectedReported = true;
-            logMessage(sim_verbosity_warnings,
-                       "marker callback received outside of a render frame, ignored");
-        }
         return;
-    }
 
 
     const int type = readInt(data[0], markerTypePoints);
@@ -658,17 +649,7 @@ void handleMarker(void** data)
         // A custom mesh is described entirely by its vertices and indices, so it
         // is still renderable without a point list: place it at the origin.
         if (type != markerTypeCustom)
-        {
-            if (!s.markerRejectedReported)
-            {
-                s.markerRejectedReported = true;
-                logMessage(sim_verbosity_warnings,
-                           "marker callback without usable data (points=" +
-                               std::to_string(points != nullptr ? 1 : 0) + ", count=" +
-                               std::to_string(pointDataCount) + ")");
-            }
             return;
-        }
         marker.points.assign({0.0f, 0.0f, 0.0f});
     }
     else
@@ -920,36 +901,6 @@ Mat4 objectPoseMatrix(SIMHANDLE objectHandle)
     return Mat4();
 }
 
-// Short description of where a transformed point set ended up, so a misplaced
-// object can be told apart from an undrawn one.
-std::string describeBounds(const std::vector<float>& localPositions, const Mat4& transform)
-{
-    if (localPositions.empty())
-        return "(no points)";
-
-    Vec3 minimum(localPositions[0], localPositions[1], localPositions[2]);
-    Vec3 maximum = minimum;
-    for (std::size_t i = 1; i * 3 + 2 < localPositions.size(); ++i)
-    {
-        minimum.setX(std::min(minimum.x(), localPositions[i * 3 + 0]));
-        minimum.setY(std::min(minimum.y(), localPositions[i * 3 + 1]));
-        minimum.setZ(std::min(minimum.z(), localPositions[i * 3 + 2]));
-        maximum.setX(std::max(maximum.x(), localPositions[i * 3 + 0]));
-        maximum.setY(std::max(maximum.y(), localPositions[i * 3 + 1]));
-        maximum.setZ(std::max(maximum.z(), localPositions[i * 3 + 2]));
-    }
-
-    // The centre of the local box, transformed: enough to see whether the object
-    // is where it should be.
-    const Vec3 centre = (minimum + maximum) * 0.5f;
-    const Vec4 world = transform * Vec4(centre, 1.0f);
-    char text[192];
-    std::snprintf(text, sizeof(text), "local %.3f..%.3f/%.3f..%.3f/%.3f..%.3f world (%.3f, %.3f, %.3f)",
-                  double(minimum.x()), double(maximum.x()), double(minimum.y()),
-                  double(maximum.y()), double(minimum.z()), double(maximum.z()), double(world.x()),
-                  double(world.y()), double(world.z()));
-    return std::string(text);
-}
 // Walks every point cloud and oc-tree of the scene.  Index based enumeration ends
 // at the first negative handle.
 void collectPointCloudsAndOctrees(FrameData& frame)
@@ -957,18 +908,8 @@ void collectPointCloudsAndOctrees(FrameData& frame)
     frame.pointClouds.clear();
     frame.octrees.clear();
 
-    // What the walk found, so an empty scene can be told apart from a rendering
-    // problem with a single line.
-    static bool reported = false;
-    std::size_t cloudCount = 0;
-    std::size_t cloudPoints = 0;
-    std::size_t octreeCount = 0;
-    std::size_t octreeVoxels = 0;
-    double firstCellSize = 0.0;
-    std::string firstCloudBounds;
-    std::string firstOctreeBounds;
-    float firstCloudPointSize = 0.0f;
-    int firstOctreeShowPoints = -1;
+
+
 
     if (simGetObjects == nullptr)
         return;
@@ -1006,13 +947,7 @@ void collectPointCloudsAndOctrees(FrameData& frame)
         fillColors(cloud.colors, cloud.positions.size() / 3, readByteBuffer(handle, "colors"),
                    random != 0);
         cloud.transform = objectPoseMatrix(handle);
-        ++cloudCount;
-        cloudPoints += cloud.positions.size() / 3;
-        if (firstCloudBounds.empty())
-        {
-            firstCloudBounds = describeBounds(cloud.positions, cloud.transform);
-            firstCloudPointSize = cloud.pointSize;
-        }
+
         frame.pointClouds.push_back(std::move(cloud));
     }
 
@@ -1051,35 +986,11 @@ void collectPointCloudsAndOctrees(FrameData& frame)
         fillColors(octree.colors, octree.positions.size() / 3, readByteBuffer(handle, "colors"),
                    random != 0);
         octree.transform = objectPoseMatrix(handle);
-        ++octreeCount;
-        octreeVoxels += octree.positions.size() / 3;
-        if (firstCellSize == 0.0)
-        {
-            firstCellSize = voxelSize;
-            firstOctreeBounds = describeBounds(octree.positions, octree.transform);
-            int showPoints = 0;
-            if (simGetBoolProperty != nullptr &&
-                simGetBoolProperty(handle, "showPoints", &showPoints) == sim_propertyret_ok)
-            {
-                firstOctreeShowPoints = showPoints;
-            }
-        }
+
         frame.octrees.push_back(std::move(octree));
     }
-
-    if (!reported)
-    {
-        reported = true;
-        logMessage(sim_verbosity_warnings,
-                   "primitives: " + std::to_string(cloudCount) + " point cloud(s), " +
-                       std::to_string(cloudPoints) + " points, " + std::to_string(octreeCount) +
-                       " oc-tree(s), " + std::to_string(octreeVoxels) + " voxels, cell " +
-                       std::to_string(firstCellSize) + " m, showPoints " +
-                       std::to_string(firstOctreeShowPoints) + "; cloud pointSize " +
-                       std::to_string(firstCloudPointSize) + " " + firstCloudBounds +
-                       "; oc-tree " + firstOctreeBounds);
-    }
 }
+
 void handleStop(void** data)
 {
     RendererState& s = state();
